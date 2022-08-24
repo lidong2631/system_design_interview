@@ -1,0 +1,22 @@
+Design Search Autocomplete System
+
+Candidate: Is the matching only supported at the beginning of a search query or in the middle as well?
+Interviewer: Only at the beginning of a search query.
+
+Candidate: How many autocomplete suggestions should the system return? 
+Interviewer: 5
+
+Candidate: How does the system know which 5 suggestions to return?
+Interviewer: This is determined by popularity, decided by the historical query frequency.
+
+Candidate: Does the system support spell check? 
+Interviewer: No, spell check or autocorrect is not supported.
+
+Candidate: Are search queries in English?
+Interviewer: Yes. If time allows at the end, we can discuss multi-language support.
+
+Candidate: Do we allow capitalization and special characters?
+Interviewer: No, we assume all search queries have lowercase alphabetic characters.
+
+Candidate: How many users use the product? 
+Interviewer: 10 million DAU.

@@ -1,0 +1,155 @@
+Design job scheduler
+
+https://towardsdatascience.com/ace-the-system-design-interview-job-scheduling-system-b25693817950
+
+Read Operations
+	Given a user ID, retrieve all jobs that belong to it (by client)
+	Given a job ID, retrieve all/latest execution histories belonging to it (by client)
+	Find all jobs that are scheduled to run right now (by internal servers)
+
+Write Operations
+	A user can create/delete a new job schedule (by client).
+	The workers will add execution histories to the database (by internal servers).
+	The system updates the next execution timestamp of a job after running it (by internal servers).
+
+
+
+Schema
+job table
+partition key 	sort key
+user id 		job id 		retry times 	created 			interval
+2940			fgn23901 	3 				1/1/2019 13:33:21 	5hr
+...
+
+history table
+partition key 	sort key
+job id 			execution id 		status 		worker id 			retry cnt
+fgn23901	 	1/1/2019 13:33:21 	running		234 				1
+...
+
+schedule table
+partition key 	sort key
+job id 			next execution
+fgn23901 		1/1/2019 18:33:21
+...
+
+get the list of to-dos
+SELECT * FROM ScheduleTable WHERE NextExecution == "1/5/2022:08:43"
+
+
+to avoid table scan, we simply reverse the data model, This means that jobs that are scheduled to run in the same minute will share the same partition key
+To get jobs that are scheduled to run right now, simply find the right partition with the current UNIX timestamp
+
+partition key 	sort key
+next execution 	job id
+1641800000 		fgn23901
+
+SELECT * FROM ScheduleTable WHERE NextExecution > "1641082500" AND NextExecution < "1641082580"
+
+
+
+API design
+submit_job(user_id, schedule, code_location)
+retrieve_all_jobs(user_id)
+delete_job(user_id, job_id)
+get_exec_history(job_id)
+
+
+
+architecture
+Web Service: The gateway to the scheduling system. All RPC calls from the client are handled by one of the RPC servers in this service.
+
+Scheduling Service: It checks the database every minute for pending jobs and pushes them to a queue for execution. Once a job is scheduled, 
+					create an entry in the execution history table with status = SCHEDULED. With this service, we guarantee that all jobs are pushed to the queue in a timely manner.
+
+Execution Service: In this service, we manage a large group of execution workers. Each worker is a consumer and executes whatever jobs it gets from the queue. 
+					Additional bookkeeping is needed to ensure re-execution upon worker failures.
+
+
+
+details
+
+SELECT * FROM ScheduleTable WHERE NextExecution > "1641082500" AND NextExecution < "1641082580"
+if, let’s say, 100K jobs are scheduled to run in this minute, we certainly need more workers to handle the ingress data from the query as well as push messages to the queue.
+How can we distribute the data so that each worker only consumes a small fraction (10%) of the 100K jobs? It turns out that a simple composite partition key can fix this issue:
+
+partition key 	partition key		sort key
+next execution 	shard 				job id
+1641800000 		1 					fgn23901
+
+When a row is added to the schedule table, it is randomly assigned a shard number. With the new schema, it is super easy to distribute the load across workers:
+Worker 1: 
+SELECT * FROM ScheduleTable WHERE NextExecution > "1641082500" AND NextExecution < "1641082580" AND shard =1 
+Worker 2:
+SELECT * FROM ScheduleTable WHERE NextExecution > "1641082500" AND NextExecution < "1641082580" AND shard = 2
+...
+
+workers come and go all the time. There is no guarantee that all shards will be covered. The problem becomes how can we assign N shards evenly to M workers, where M can change at any time?
+a master is used to assign and monitor workers.
+
+
+Queue delivery
+At-least-once delivery
+In this mode of delivery, messages are processed before their indices are committed by the consumer. If the consumer dies before committing, the same message will be processed again by a different worker.
+
+At-most-once delivery
+In this mode of delivery, messages are processed after their indices are committed by the consumer. If the consumer dies before finishing the task, the job won’t be reprocessed.
+
+
+Handling failures & Retries
+Although at-least-once delivery guarantees that every job gets assigned to a worker, it does not prevent jobs from getting dropped upon worker failure. To achieve true retry capability, an asynchronous health checker is introduced to run the following logic:
+
+1. When a job is assigned, an entry is created in the local database with the latest update time.
+2. All workers are required to refresh the update time ~10s.
+3. The health checker will periodically scan the table, looking for jobs with stale update time (e.g. older than 30 seconds).
+4. Jobs that meet the above criteria are sent back to the queue for re-execution.
+
+
+
+data flow
+Create/delete job/Retrieve history
+	The client sends out an RPC call to Web Service.
+	One of the RPC servers queries the database using the provided partition key and return the result
+
+Schedule a job
+Master
+	Every minute, the master node creates an authoritative UNIX timestamp and assigns a shard ID (see details for more) to each worker along with the timestamp
+	Check worker health regularly. If it dies, reassign its work to others
+Worker
+	The worker queries the database with the timestamp and shard ID.
+	For each row, send it to the queue if it has not been scheduled (see details for more)
+
+Execute a job
+Orchestrator
+	A group of orchestrators consumes messages from the queue
+	Given a message, find one worker with the least workload. Assign the job to the worker
+	Commit the index, repeat steps 1 to 3
+Worker
+	The worker regularly update the local database with its timestamp
+Health Checker
+	Scans the local database ~ 10 seconds
+	If any row hasn’t been updated in ~30 seconds, retry it by pushing the job ID to the queue
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

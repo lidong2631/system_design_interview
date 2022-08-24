@@ -1,0 +1,240 @@
+Design Web Crawler (jiuzhang)
+---------- final solution:
+
+ask question: 
+are we crawling for html page only ?
+what protocols we use, just http ?
+how many pages we expect to crawl ?
+
+爬取目标(面试要求): 10天之内抓取下 1B 网页 (1k webpages per sec) 需要 10T 的存储 (10k per webpage)
+
+爬虫存HTML, 文本信息在不同的位置权重不同 标题和正文的权重不一样 且还需要保存 <a href=”/course/”> 这样的链接信息
+
+seed URLs: 种子链接 (seed urls) 通常是一些新闻类网站 或者 Alexa 上的 Top 100 sites
+
+Service: crawler service
+使用什么算法进行爬取? BFS, most valuable info from web pages doesn't have much link depth
+
+web crawler is producer and consumer 从队列中获取需要抓取的 URL 并抓取 把网页中解析出的新 URL 加入 到队列中
+
+单进程(single process)爬虫是否可行? 最大瓶颈是什么? single process 会因为 network 的原因大部分时间处于 idle 状态 一般来说，平均 download 一篇 webpage 需要 2s 那么 single process 的性能只能做到 0.5 webpage / s
+
+是否进程数越多越好? 既然一个 process 可以做到 0.5 webpage / s 是不是 2k 个 processes 就可以做到 1k webpages / s ? 
+不行，过多的 context switch 会导致 CPU 利用率下降 更好的办法是，我们可以用 20 台机器，每台机器启动 100 个 processes，每个 process 单独执行一个爬虫程序
+
+Storage
+爬虫爬取到的网页，如何存储? DFS (Distributed File System) 若是直接在爬虫上存储会使得数据管理混乱 且破坏了爬虫 Stateless 的属性
+BFS 中的队列如何存储? 直接在内存中存储会导断电时数据丢失 应该使用 Message Queue，如 Redis, Kafka, RabbitMQ
+BFS 中的 HashSet 如何存储? 存储在数据库中 可以是效率比较高的 key-value 的数据库 除了是否被取过的信息，还可以同时存储其他的一些信息
+
+Robots Exlcusion Protocol 协议 
+有很多网站的 robots 协议中会限制爬虫的访问频率 Robots 协议不是一个强制协议，是一个软性约定
+
+如何限制爬虫访问某个网站的频率? 让 Crawler 只做 Consumer，不负责产生新的抓取任务 新增一个 Scheduler (Producer) 负责调度和生产抓取任务 在 Database 中记录每个网站下一次可以友好抓取的时间
+refer 第38页
+Database 中存储的数据
+DomainToUrlList 						DomainInfo 										UrlInfo
+key = domain 							key = domain 									key = URL
+value = [url1, url2 ...] 				value = <next_good_time, rate, ...> 			value = {doc_id, status, domain, created_At, updated_At }
+
+def crawler_task(url):
+	webpage = http_request.download(url) # download webpage
+	distributed_file_system.save(url, webpage) # store webpage
+
+	for next_url in extract_urls(webpage):
+		if not database.url_existed(next_url):
+			domain = fetch_domain(next_url) 	# get domain of the url
+			database.append_url(domain=domain, url=next_url)  # put url into its domain
+
+def scheduler(scheduler_id):
+	while True:
+		for domain in database.filter_domains(key=scheduler_id):
+			if not good_time_to_crawl(domain):
+				continue
+
+			url = database.get_url_from(domain)
+			message_queue.add_task('crawler_task', url)
+			database.update_next_available_crawl_time(domain)
+
+在不同的地区部署 Crawler 系统 每个地区只抓取所在地区被分配的 domain 下的网页 可以通过 domain 的 whois 信息来确定网站所属地区
+
+如何处理网页的更新和失效? 增加对每个 URL 的信息记录 记录下这个 URL 下一次需要被重新抓取的时间 可以通过 Expenential Backoff 的方式计算
+
+
+
+
+
+
+
+
+
+Alex Xu's chapter 9 Design a Web Crawler
+
+Candidate: What is the main purpose of the crawler? Is it used for search engine indexing, data mining, or something else?
+Interviewer: Search engine indexing.
+
+Candidate: How many web pages does the web crawler collect per month? 
+Interviewer: 1 billion pages.
+
+Candidate: What content types are included? HTML only or other content types such as PDFs and images as well?
+Interviewer: HTML only.
+
+Candidate: Shall we consider newly added or edited web pages? 
+Interviewer: Yes, we should consider the newly added or edited web pages.
+
+Candidate: Do we need to store HTML pages crawled from the web? 
+Interviewer: Yes, up to 5 years
+
+Candidate: How do we handle web pages with duplicate content? 
+Interviewer: Pages with duplicate content should be ignored.
+
+• Scalability: The web is very large. There are billions of web pages out there. Web crawling should be extremely efficient using parallelization.
+• Robustness: The web is full of traps. Bad HTML, unresponsive servers, crashes, malicious links, etc. are all common. The crawler must handle all those edge cases.
+• Politeness: The crawler should not make too many requests to a website within a short time interval.
+• Extensibility: The system is flexible so that minimal changes are needed to support new content types. For example, if we want to crawl image files in the future, 
+				we should not need to redesign the entire system.
+
+
+
+high level design
+								DNS Resolver 					  Content Storage
+									| 									|
+seed URLs -> URL frontier -> HTML downloader -> Content Parser -> Content seen
+					|													|
+					|											  Link Extractor
+					|											  		|
+					|											  URL Filter
+					|											  		|
+					 ----------------------------------------		URL seen
+																  		|
+																  URL Storage
+
+Seed URLs: popular local websites or based on topics (shopping / sports / healthcare)
+
+URL frontier: fifo queue
+
+HTML downloader: urls provided by URL frontier
+DNS Resolver: The HTML Downloader calls the DNS Resolver to get the corresponding IP address for the URL. For instance, URL www.wikipedia.org is converted to IP address 198.35.26.96 as of 3/5/2019
+
+Content Parser: parsed and validated web page
+
+Content Seen: compare hash version of two web pages
+
+Content Storage
+
+URL Extractor: parses and extracts links from HTML pages
+URL filter
+URL Seen: hashtable / bloomfilter
+URL storage
+
+
+
+deep dive
+BFS over DFS since the depth of DFS can be very deep
+
+BFS issue:
+1. Most links from the same web page are linked back to the same host, Wikipedia servers will be flooded with requests
+2. Standard BFS does not take the priority of a URL into consideration
+
+URL frontier (refer to schedule servers from jiuzhang)
+
+POLITENESS
+The politeness constraint is implemented by maintain a mapping from website hostnames to download (worker) threads.
+
+• Queue router: It ensures that each queue (b1, b2, ... bn) only contains URLs from the same host.
+• Mapping table: It maps each host to a queue.
+	Host 			Queue
+	wikipedia.com 	b1
+	...
+• FIFO queues b1, b2 to bn: Each queue contains URLs from the same host.
+• Queue selector: Each worker thread is mapped to a FIFO queue, and it only downloads URLs from that queue. The queue selection logic is done by the Queue selector.
+• Worker thread 1 to N. A worker thread downloads web pages one by one from the same host. A delay can be added between two download tasks.
+
+PRIORITY
+We prioritize URLs based on usefulness, which can be measured by PageRank [10], website traffic, update frequency, etc.
+
+• Prioritizer: It takes URLs as input and computes the priorities.
+• Queue f1 to fn: Each queue has an assigned priority. Queues with high priority are selected with higher probability.
+• Queue selector: Randomly choose a queue with a bias towards queues with higher priority.
+
+URL frontier design, and it contains two modules: 
+• Front queues: manage prioritization
+• Back queues: manage politeness
+
+FRESHNESS
+• Recrawl based on web pages’ update history.
+• Prioritize URLs and recrawl important pages first and more frequently.
+
+storage for URL frontier
+The majority of URLs are stored on disk, so the storage space is not a problem. To reduce the cost of reading from the disk and writing to the disk, we maintain buffers in memory 
+for enqueue/dequeue operations. Data in the buffer is periodically written to the disk.
+
+HTML Downloader
+
+Robots.txt - specifies what pages crawlers are allowed to download.
+
+Performance optimization
+1. Distributed crawl
+To achieve high performance, crawl jobs are distributed into multiple servers, and each server runs multiple threads. The URL space is partitioned into smaller pieces; 
+so, each downloader is responsible for a subset of the URLs
+
+2. Cache DNS Resolver
+DNS Resolver is a bottleneck for crawlers because DNS requests might take time due to the synchronous nature of many DNS interfaces
+Once a request to DNS is carried out by a crawler thread, other threads are blocked until the first request is completed. Maintaining our DNS cache to 
+avoid calling DNS frequently is an effective technique for speed optimization. Our DNS cache keeps the domain name to IP address mapping and is updated periodically by cron jobs.
+
+3. Locality
+Distribute crawl servers geographically. When crawl servers are closer to website hosts, crawlers experience faster download time. 
+
+4. Short timeout
+Some web servers respond slowly or may not respond at all. To avoid long wait time, a maximal wait time is specified. If a host does not respond within a predefined time, 
+the crawler will stop the job and crawl some other pages.
+
+Robustness
+• Consistent hashing: This helps to distribute loads among downloaders. A new downloader server can be added or removed using consistent hashing. Refer to Chapter 5: Design consistent hashing for more details.
+• Save crawl states and data: To guard against failures, crawl states and data are written to a storage system. A disrupted crawl can be restarted easily by loading saved states and data.
+
+Extensibility
+see pic
+
+Detect and avoid problematic content
+1. Redundant content
+Hashes or checksums help to detect duplication
+
+2. Spider traps
+A spider trap is a web page that causes a crawler in an infinite loop 
+www.spidertrapexample.com/foo/bar/foo/bar/foo/bar/...
+Such spider traps can be avoided by setting a maximal length for URLs
+a user can manually verify and identify a spider trap, and either exclude those websites from the crawler or apply some customized URL filters
+
+3. Data noise
+Some of the contents have little or no value, such as advertisements, code snippets, spam URLs, etc. Those contents are not useful for crawlers and should be excluded if possible.
+
+
+
+additional points
+• Server-side rendering: Numerous websites use scripts like JavaScript, AJAX, etc to generate links on the fly. If we download and parse web pages directly, we will not be able to retrieve dynamically generated links. To solve this problem, we perform server-side rendering (also called dynamic rendering) first before parsing a page.
+• Filter out unwanted pages: With finite storage capacity and crawl resources, an anti-spam component is beneficial in filtering out low quality and spam pages.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

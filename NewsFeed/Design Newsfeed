@@ -1,0 +1,190 @@
+Design Newsfeed
+
+jiuzhang
+---------- final solution:
+
+overall we pre-genreated news feed for each user (might use LRU to only generate news feed for users who have accessed their news feed in a period of time).
+we have dedicated servers continuously generating users' news feed and store in cache (redis).
+in cache server the feeds would be stored as:
+			user_id: {LinkedHashMap<feed_id, feed_item> feed_items, Datetime lastGenerated}
+			lastGenerated is used for generating new feeds and feed_id is used to generate next batch/page size of feeds
+we use hybrid for publishing news feed. push for users who have under 1k followers and pull for celebrity/super_user (calculation of super_user is done offline and you cannot turn super_user to a regular user)
+
+storage
+User Table 				Friendship Table 					Tweet(FeedItem) Table
+id integer pk			from_user_id Foreign Key pk			id integer
+username varchar 		to_user_id Foreign Key pk			user_id Foreign Key
+email varchar 			created_at timestamp 				content text
+password varchar  											creation_time
+is_superstar boolean 										num_likes
+
+FeedMedia 				Media
+feed_item_id pk 		Media_id pk
+media_id pk 			type
+ 						description
+ 						path
+ 						creation_time
+
+
+
+
+
+1. feeds generating
+offline generation for news feed
+we have dedicated servers continuously generating users' newsfeed and store them in cache server. when user requests new post we'll give pre-generated items from cache.
+when needs to generate feed for a user, server will first see last time feed was generated and generate from that time onwards. we can store this info as:
+user_id: {LinkedHashMap<feed_id, feed_item> feed_items, Datetime lastGenerated}
+Whenever users want more feed items (like When they reach the end of her current feed) they can send the last FeedItemID they currently see in their newsfeed we then jump to that FeedItemID in our map and return next batch/page feed items from there.
+
+Q:
+How many feed items should we store in memory for a user’s feed ? 100 or customized
+Should we generate (and keep in memory) newsfeeds for all users ? no we can have a LRU to remove users haven't accessed their newsfeed for a long time
+we generated the feed once and stored it in the cache. What about new incoming posts from people that Jane follows ? periodically (say every five minutes) perform the above steps to rank and add the newer posts to her feed. Jane can then be notified that there are newer items in her feed that she can fetch or she can directly do a pull to refresh to get new feeds.
+
+
+2. feeds publishing
+push vs pull
+pull											created_at timestamp
+when user get their news feed, 1. get their followings 2. get their followings first 100 posts 3. merge sort and get first 100 posts from all followings
+problem: n (total followings) read operations from db very slow
+
+push
+each user has a list of their news feed. when user post a new tweet, it will be fanout (async) to all its followers' news feed list (LinkedHashMap, updated lastGenerated)
+problem: n (total followers) write operation. not work well for users have lots of followers
+
+3. feeds rank
+by creation time of posts
+calculate a score based on number of likes, comments, shares, time of the update, whether the post has images/videos, etc.
+
+4. data partition
+a. sharding posts
+creation_time + auto-generated sequence ??? see (grokking instagram)
+
+b. sharding feed data
+shard by user_id so all data of a user on one cache server since we only have more than 100 feeds 
+
+5. how to define superstar
+为 User 增加一个 is_superstar 的属性
+• 一个用户被标记为 superstar 之后，就不能再被取消标记
+
+6. new follow/unfollow
+Follow 一个用户之后，异步地将他的 Timeline 合并到你的 News Feed 中 
+• Merge timeline into news feed asynchronously.
+Unfollow 一个用户之后，异步地将他发的 Tweets 从你的 News Feed 中移除 
+• Pick out tweets from news feed asynchronously.
+
+7. 如何存储 likes?
+Tweet Table
+id integer
+user_id Foreign Key
+content text
+created_at timestamp
+num_of_likes * integer
+num_of_comments * integer
+num_of_retweets * integer
+Denormalize 获得点赞数的方式:
+当有人点赞的时候:
+UPDATE like_table SET num_of_likes = num_of_likes + 1 where tweet_id = xxx 当有人取消赞的时候:
+UPDATE like_table SET num_of_likes = num_of_likes - 1 where tweet_id = xxx 想要获得一个 Tweet 的点赞数时，因为 num_of_likes 就存在 tweet 里，故无需额外的 SQL Queries
+
+
+--------------------------
+
+
+
+
+
+
+
+Alex Xu Chapter 11 Design a news feed system
+
+Candidate: Is this a mobile app? Or a web app? Or both? 
+Interviewer: Both
+
+Candidate: What are the important features?
+Interview: A user can publish a post and see her friends’ posts on the news feed page.
+
+Candidate: Is the news feed sorted by reverse chronological order or any particular order such as topic scores? For instance, posts from your close friends have higher scores. 
+Interviewer: To keep things simple, let us assume the feed is sorted by reverse chronological order.
+
+Candidate: How many friends can a user have? 
+Interviewer: 5000
+
+Candidate: What is the traffic volume? 
+Interviewer: 10 million DAU
+
+Candidate: Can feed contain images, videos, or just text?
+Interviewer: It can contain media files, including both images and videos.
+
+
+high level design
+two flows: feed publishing and news feed building
+
+• Feed publishing: when a user publishes a post, corresponding data is written into cache and database. A post is populated to her friends’ news feed.
+• Newsfeed building: for simplicity, let us assume the news feed is built by aggregating friends’ posts in reverse chronological order.
+
+news feed API
+1. Feed publishing API
+	POST /v1/me/feed
+	Params:
+	• content: content is the text of the post.
+	• auth_token: it is used to authenticate API requests.
+
+2. Newsfeed retrieval API
+2. GET /v1/me/feed
+	Params:
+	• auth_token: it is used to authenticate API requests.
+
+Feed publishing deep dive
+web servers
+Besides communicating with clients, web servers enforce authentication and rate-limiting
+
+Fanout service
+push: pre-computed
+pull: on-demand
+
+we use a hybrid approach
+Since fetching the news feed fast is crucial, we use a push model for the majority of users. For celebrities or users who have many friends/followers, we let followers pull news content on-demand to avoid system overload.
+Consistent hashing is a useful technique to mitigate the hotkey problem as it helps to distribute requests/data more evenly
+
+
+fanout services
+1. Fetch friend IDs from the graph database
+2. Get friends info from the user cache. The system then filters out friends based on user settings. For example, if you mute someone, her posts will not show up on your news feed even though you are still friends
+3. Send friends list and new post ID to the message queue
+4. Fanout workers fetch data from the message queue and store news feed data in the news feed cache. You can think of the news feed cache as a <post_id, user_id> mapping table. Whenever a new post is made, 
+it will be appended to the news feed table as shown in Figure 11-6. The memory consumption can become very large if we store the entire user and post objects in the cache. Thus, only IDs are stored
+
+Newsfeed retrieval deep dive
+1. A user sends a request to retrieve her news feed. The request looks like this: /v1/me/feed 2. The load balancer redistributes requests to web servers.
+3. Web servers call the news feed service to fetch news feeds.
+4. News feed service gets a list post IDs from the news feed cache.
+5. A user’s news feed is more than just a list of feed IDs. It contains username, profile picture, post content, post image, etc. Thus, the news feed service fetches the complete user and post objects from caches 
+	(user cache and post cache) to construct the fully hydrated news feed.
+6. The fully hydrated news feed is returned in JSON format back to the client for rendering.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

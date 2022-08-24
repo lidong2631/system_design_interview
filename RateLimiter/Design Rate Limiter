@@ -1,0 +1,57 @@
+Design Rate Limiter
+
+
+Where to put rate limiter ?
+1. API servers
+2. middleware / api gateway
+
+
+
+Algorithms
+• Token bucket
+• Leaking bucket
+• Fixed window counter 
+• Sliding window log
+• Sliding window counter
+
+
+
+
+
+
+
+
+Rate Limiter in a distributed env
+There are two challenges:
+• Race condition
+• Synchronization issue
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

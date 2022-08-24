@@ -1,0 +1,59 @@
+Design notification system
+
+high level design
+Different types of notifications
+
+iOS push notification
+Provider - APNs - iOS
+• Provider. A provider builds and sends notification requests to Apple Push Notification Service (APNS). To construct a push notification, the provider provides the following data:
+	• Device token: This is a unique identifier used for sending push notifications.
+	• Payload: This is a JSON dictionary that contains a notification’s payload
+		{
+			"aps": {
+				"alert": {
+					"title": "Game Request",
+					"body": "Bob wants to play chess",
+					"action-loc-key": "PLAY"
+				},
+				"badge": 5
+			}
+		}
+• APNS: This is a remote service provided by Apple to propagate push notifications to iOS devices.
+• iOS Device: It is the end client, which receives push notifications.
+
+Android push notification
+Provider - APNs - iOS
+Instead of using APNs, Firebase Cloud Messaging (FCM) is commonly used to send push notifications to android devices.
+
+SMS message
+For SMS messages, third party SMS services like Twilio [1], Nexmo [2], and many others are commonly used. Most of them are commercial services.
+Provider - SMS service - SMS
+
+Email
+Although companies can set up their own email servers, many of them opt for commercial email services. Sendgrid [3] and Mailchimp [4] are among the most popular email services, 
+which offer a better delivery rate and data analytics.
+Provider - Email Service - Email
+
+Contact info gathering flow
+To send notifications, we need to gather mobile device tokens, phone numbers, or email addresses. when a user installs our app or signs up for the first time, API servers collect user contact info and store it in the database.
+Email addresses and phone numbers are stored in the user table, whereas device tokens are stored in the device table. A user can have multiple devices, indicating that a push notification can be sent to all the user devices.
+
+user 									device
+user_id 		bigint 					id 				 	bigint
+email 			varchar 				device_token 	 	varchar
+country_code 	integer 				user_id 		 	bigint
+phone_number 	integer 				last_logged_in_at 	timestamp
+created_at 		timestamp
+
+
+
+deep dive
+
+Reliability
+
+
+
+
+
+
+

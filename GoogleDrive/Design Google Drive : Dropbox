@@ -1,0 +1,90 @@
+Design Google Drive / Dropbox
+
+Candidate: What are the most important features?
+Interviewer: Upload and download files, file sync, and notifications.
+
+Candidate: Is this a mobile app, a web app, or both? 
+Interviewer: Both.
+
+Candidate: What are the supported file formats? 
+Interviewer: Any file type.
+
+Candidate: Do files need to be encrypted?
+Interview: Yes, files in the storage must be encrypted.
+
+Candidate: Is there a file size limit? 
+Interview: Yes, files must be 10 GB or smaller.
+
+Candidate: How many users does the product have? 
+Interviewer: 10M DAU.
+
+
+
+APIs
+1. Upload a file to Google Drive
+Two types of uploads are supported:
+• Simple upload. Use this upload type when the file size is small.
+• Resumable upload. Use this upload type when the file size is large and there is high chance of network interruption.
+
+Here is an example of resumable upload API:
+https://api.example.com/files/upload?uploadType=resumable
+Params:
+• uploadType=resumable
+• data: Local file to be uploaded.
+ 
+A resumable upload is achieved by the following 3 steps [2]: 
+• Send the initial request to retrieve the resumable URL.
+• Upload the data and monitor upload state.
+• If upload is disturbed, resume the upload.
+
+2. Download a file from Google Drive
+Example API: https://api.example.com/files/download
+Params:
+• path: download file path.
+Example params:
+{
+	"path": "/recipes/soup/best_soup.txt"
+}
+
+3. Get file revisions
+Example API: https://api.example.com/files/list_revisions
+Params:
+• path: The path to the file you want to get the revision history.
+• limit: The maximum number of revisions to return.
+Example params:
+{
+	"path": "/recipes/soup/best_soup.txt",
+	"limit": 20 
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

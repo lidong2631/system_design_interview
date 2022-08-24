@@ -1,0 +1,297 @@
+Design tinyUrl (jiuzhang )
+
+---------- final solution:
+Scenario
+http://www.jiuzhang.com <=> http://bit.ly/1UIoQB6
+
+Service
+UrlService.encode(long_url)     POST /data/shorten data={url: http://xxx}   -> return short url
+UrlService.decode(short_url)    GET /short_utl  -> return http redirect response
+
+Storage
+use sql for auto-incremented id
+
+id              long_url (index=true)
+1               http://google.com
+2               http://facebook.com
+...
+
+Algorithm
+1. 随机一个 6 位的 ShortURL，如果没有被用过，就绑定到该 LongURL
+2. 每个short url 对应到一个整数 该整数对应数据库表的Primary Key —— Sequential ID
+def short_url_to_id(short_url):
+    id = 0
+    for c in short_url:
+        id = id * 62 + to_base_62(c)
+    return id
+
+def id_to_short_url(id):
+    char_set = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    short_url = ""
+    while id > 0:
+        short_url = char_set[id % 62] + short_url
+        id /= 62
+    while len(short_url) < 6:
+        short_url = '0' + short_url
+    return short_url
+
+Scale
+cache 缓存里需要存两类数据 long to short(生成新 short url 时需要) • short to long(查询 short url 时需要)
+使用Centralized MySQL+Distributed Memcached 一个MySQL配多个Memcached，Memcached跨地区分布
+
+
+--------------------------
+
+Long Url 和 Short Url 之间必须是一一对应的关系么? Short Url 长时间没人用需要释放么?
+
+Service
+TinyUrl只有一个UrlService
+UrlService.encode(long_url)
+UrlService.decode(short_url)
+GET /<short_url>
+• return a Http redirect response
+POST /data/shorten/
+• Data = {url: http://xxxx }
+• Return short url
+
+Storage
+
+算法是什么?
+算法1 使用哈希函数 Hash Function(不可行) 比如取 Long Url 的MD5的最后6位 缺点:难以设计一个没有冲突的哈希算法
+
+算法2 随机生成ShortURL + 数据库去重
+public String longToShort(String url) {
+	while (true) {
+		String shortUrl = randomShortUrl();
+		if (!database.filter(shortUrl=shortUrl).exists()) {
+			database.create(shortUrl=shortUrl, longUrl=url);
+			return shortUrl
+		}
+	}
+}
+	优点:实现简单
+	缺点:生成短网址的速度随着短网址越来越多变得越来越慢
+
+算法3 进制转换 Base62
+Base62
+• 将 6 位的short url看做一个62进制数(0-9, a-z, A-Z)
+• 每个short url 对应到一个整数
+• 该整数对应数据库表的Primary Key —— Sequential ID
+	优点:效率高
+	缺点:依赖于全局的自增ID
+
+see Leetcode Encode and Decode TinyURL for Base62 implementation
+class Codec:
+    
+    def __init__(self):
+        self.counter = 0
+        self.char_set = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        self.long_to_short = {}
+        self.short_to_long = {}
+
+    def encode(self, longUrl: str) -> str:
+        """Encodes a URL to a shortened URL.
+        """
+        if longUrl in self.long_to_short:
+            return self.long_to_short[longUrl]
+        short_url = ""
+        curr = self.counter
+        self.counter += 1
+        while curr > 0:
+            short_url = self.char_set[curr % 62] + short_url
+            curr /= 62
+        while len(short_url) < 6:
+            short_url = '0' + short_url
+        self.long_to_short[longUrl] = short_url
+        self.short_to_long[short_url] = longUrl
+        return short_url
+
+    def decode(self, shortUrl: str) -> str:
+        """Decodes a shortened URL to its original URL.
+        """
+        return self.short_to_long[shortUrl]
+
+# Your Codec object will be instantiated and called as such:
+# codec = Codec()
+# codec.decode(codec.encode(url))
+
+基于随机生成的方法
+需要根据 Long 查询 Short，也需要根据 Short 查询 Long
+shortKey 		longUrl
+a0B4Lb 			http://www.jiuzhang.com/
+Df523P 			http://www.lintcode.com/
+dao80F 			http://www.google.com/
+QFD8oq 			http://www.facebook.com/
+并且需要对 shortKey 和 longURL 分别建索引(index)
+
+基于进制转换的方法
+因为需要用到自增ID(Sequential ID)，因此只能选择使用 SQL 型数据库 表单结构如下，shortURL 可以不存储在表单里，因为可以根据 id 来进行换算
+id 			longUrl (index=true)
+1 			http://www.jiuzhang.com/
+2 			http://www.lintcode.com/
+3 			http://www.google.com/
+4 			http://www.facebook.com/
+
+Scale – 如何提速
+利用缓存提速(Cache Aside) 
+• 缓存里需要存两类数据:
+• long to short(生成新 short url 时需要)
+• short to long(查询 short url 时需要)
+优化服务器访问速度
+• 不同的地区，使用不同的 Web 服务器
+• 通过DNS解析不同地区的用户到不同的服务器
+优化数据访问速度
+• 使用Centralized MySQL+Distributed Memcached
+• 一个MySQL配多个Memcached，Memcached跨地区分布
+
+Scale —— 如何扩展?
+• 增加多台数据库服务器可以优化什么?
+• 解决“存不下”的问题 —— Storage的角度 
+• 解决“忙不过”的问题 —— QPS的角度
+
+选 Sharding Key
+如果一个 Long 可以对应多个 Short:
+• 使用 Cache 缓存所有的 Long to Short
+• 在为一个 Long Url 创建 Short Url 的时候，如果 cache miss 则去直接创建新的 short url 即可
+如果一个 Long 只能对应一个 Short:
+	如果使用随机生成 Short Url 的算法
+	• 两张表单，一张存储 Long to Short，一张存储 Short to Long
+	• 每个映射关系存两份，则可以同时支持 long to short 和 short to long 的查询
+	如果使用 base62 的进制转换法
+	• 这里有一个很严重的问题是，多台机器之间如何维护一个全局自增的 ID?
+
+Scale —— 全局自增ID
+• 一种解决办法是，专门用一台数据库来做自增ID服务
+• 该数据库不存储真实数据，也不负责其他查询
+• 为了避免单点失效(Single Point Failure) 可能需要多台数据库
+• 另外一种解决办法是用 Zookeeper
+
+基于 base62 的方法下的 Sharding key 策略
+• 使用 Hash(long_url) % 62 作为 Sharding key
+• 并将 Hash(long_url) % 62 直接放到 short url 里
+• 如果原来的 short key 是 AB1234 的话，现在的 short key 是
+• hash(long_url) % 62 + AB1234
+• 如果 hash(long_url) % 62 = 0 那就是 0AB1234
+• 这样我们就可以同时通过 short_url 和 long_url 得到 Sharding Key 
+• 缺点:数据库的机器数目不能超过 62
+
+
+
+
+
+
+
+
+
+
+
+Alex Xu chapter 8 Design a url shortener
+
+Back of the envelope estimation
+• Write operation: 100 million URLs are generated per day. 
+• Write operation per second: 100 million / 24 /3600 = 1160
+• Read operation: Assuming ratio of read operation to write operation is 10:1, read operation per second: 1160 * 10 = 11,600
+• Assuming the URL shortener service will run for 10 years, this means we must support 100 million * 365 * 10 = 365 billion records.
+• Assume average URL length is 100.
+• Storage requirement over 10 years: 365 billion * 100 bytes * 10 years = 365 TB
+
+The hashValue consists of characters from [0-9, a-z, A-Z], containing 10 + 26 + 26 = 62 possible characters. To figure out the length of hashValue, find the smallest n such that 62^n ≥ 365 billion. 
+The system must support up to 365 billion URLs based on the back of the envelope estimation
+When n = 7, 62 ^ n = ~3.5 trillion, 3.5 trillion is more than enough to hold 365 billion URLs, so the length of hashValue is 7.
+
+
+
+high level design
+API endpoints 
+1. URL shortening - To create a new short URL, a client sends a POST request, which contains one parameter: original long url
+POST api/v1/data/shorten
+	request parameter: {longUrl: longUrl string}
+	return shortUrl
+
+2. URL redirecting - To redirect a short URL to the corresponding long URL, a client sends a GET request
+GET api/v2/shortUrl
+	return longUrl for HTTP redirection
+
+URL redirecting
+Once the server receives a tinyurl request, it changes the short URL to the long URL with 301 redirect
+301 redirect vs 302 redirect
+
+301
+A 301 redirect shows that the requested URL is “permanently” moved to the long URL. Since it is permanently redirected, the browser caches the response, and subsequent requests for the same URL 
+will not be sent to the URL shortening service. Instead, requests are redirected to the long URL server directly.
+
+302
+A 302 redirect means that the URL is “temporarily” moved to the long URL, meaning that subsequent requests for the same URL will be sent to the URL shortening service first. 
+Then, they are redirected to the long URL server.
+
+Each redirection method has its pros and cons. If the priority is to reduce the server load, using 301 redirect makes sense as only the first request of the same URL is sent to URL shortening servers.
+However, if analytics is important, 302 redirect is a better choice as it can track click rate and source of the click more easily.
+
+URL shortening
+
+
+
+Design deep dive
+
+Data model
+urlTable
+id (auto increment) pk
+shortUrl
+longUrl
+
+Hash function
+comparison of two approaches
+
+Hash + collison 					Base 62 conversion
+Fixed short url length 				not fixed. go with id
+no need for unique id generator 	need unique id generator
+collison is possible 				collison is not possible
+not possible to figure out next 	easy to figure out next
+available short url 				available short url. can be a security concern
+
+The flow of URL redirecting is summarized as follows:
+1. A user clicks a short URL link: https://tinyurl.com/zn9edcu
+2. The load balancer forwards the request to web servers.
+3. If a shortURL is already in the cache, return the longURL directly.
+4. If a shortURL is not in the cache, fetch the longURL from the database. If it is not in the database, it is likely a user entered an invalid shortURL.
+5. The longURL is returned to the user.
+
+
+
+additional points
+• Rate limiter: A potential security problem we could face is that malicious users send an overwhelmingly large number of URL shortening requests. 
+  Rate limiter helps to filter out requests based on IP address or other filtering rules. If you want to refresh your memory about rate limiting, refer to “Chapter 4: Design a rate limiter”.
+• Web server scaling: Since the web tier is stateless, it is easy to scale the web tier by adding or removing web servers.
+• Database scaling: Database replication and sharding are common techniques.
+• Analytics: Data is increasingly important for business success. Integrating an analytics solution to the URL shortener could help to answer important questions like how many people click on a link? 
+  When do they click the link? etc.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
