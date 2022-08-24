@@ -1,0 +1,1703 @@
+nyc companies:
+facebook / google / stripe / chime / databricks / epic games / etsy / instacart / brex
+uber / amazon / coinbase / 2sigma / microsoft / dataiku / paxos / spotify / compass / slack / square / seatgeek / datadog
+blue apron / foursquare / jet.com / kickstarter / okcupid / seamless / appnexus / meetup / mongodb / tumblr / bitly / buzzfeed / digital ocean /
+delivery.com / flatiron health / shutterstock / nerdwallet / squarespace / streeteasy / venmo / vimeo / zocdoc
+
+
+
+
+Reference material
+1. Grokking
+2. Alex Xu system design
+3. Scott Shi
+4. Design Data Intensive Application book
+5. Engineer blog from different companies
+6. system design prime github
+7. Jiuzhang
+8. 爱思问答 acecodeinterview
+
+
+
+collection of system design interview questions 
+https://www.1point3acres.com/bbs/thread-541834-1-1.html
+
+system design guide
+https://www.1point3acres.com/bbs/thread-559285-1-1.html
+
+
+
+step by step:
+1. clarify requirement
+2. scale of system estimation
+3. interface definition
+4. data model
+5. high-level design (diagram)
+6. detailed design
+7. identify and resolve bottlenecks
+
+
+
+jiuzhang 1: design facebook/twitter news feed
+
+
+• QPS = 100
+	• 用你的笔记本做 Web 服务器就好了
+• QPS = 1k
+	• 用一台好点的 Web 服务器就差不多了
+	• 需要考虑 Single Point Failure
+• QPS = 1m
+	• 需要建设一个1000台 Web 服务器的集群
+	• 需要考虑如何 Maintainance(某一台挂了怎么办)
+• QPS和 Web Server (服务器) / Database (数据库) 之间的关系
+• 一台 Web Server 约承受量是 1k 的 QPS (考虑到逻辑处理时间以及数据库查询的瓶颈)
+• 一台 SQL Database 约承受量是 1k 的 QPS(如果 JOIN 和 INDEX query比较多的话，这个值会更小)
+• 一台 NoSQL Database (Cassandra) 约承受量是 10k 的 QPS
+• 一台 NoSQL Database (Memcached) 约承受量是 1M 的 QPS
+
+Service 服务 – 将大系统拆分为小服务
+User Service 		Tweet Service 					Media Service 		Friendship Service
+Register/Login 		Post tweet/News Feed/Timeline 	Upload Image/Video 	Follow/unfollow
+
+数据库系统 vs 文件系统
+关系:数据库系统是文件系统的一层包装，他们不是独立的关系，是依赖的关系。数据库系统依赖于文件系统
+区别:数据库系统提供了更丰富的数据操作
+数据库系统中读取的数据，大部分情况下(除了被 cache 的)，都还是会到文件系统上去读取出来的。因 此两个系统的读写效率(不考虑复杂查询)可以认为是差不多的
+
+Storage 存储 – 数据如何存储与访问
+User Table 				Friendship Table 					Tweet Table
+id integer 				from_user_id Foreign Key 			id integer
+username varchar 		to_user_id Foreign Key 				user_id Foreign Key
+email varchar 			created_at timestamp 				content text
+password varchar 											created_at timestamp
+
+news feed
+关注与被关注
+每个人看到的新鲜事都是不同的
+
+Storage 存储 – Pull Model
+算法: 在用户查看News Feed时，获取每个好友的前100条Tweets，合并出前100条News Feed • K路归并算法 Merge K Sorted Arrays
+复杂度分析: News Feed => 假如有N个关注对象，则为N次DB Reads的时间 + N路归并时间(可忽略) • Post a tweet => 1次DB Write的时间
+
+getNewsFeed(request)
+	followings = DB.getFollowings(user=request.user)
+	news_feed = empty
+	for follow in followings:
+		tweets = DB.getTweets(follow.to_user, 100) 	# N次DB Reads非常慢 且发生在用户获得News Feed的请求过程中
+		news_feed.merge(tweets)
+		sort(news_feed)
+		return news_feed[:100] # 返回前100条
+
+postTweet(request, tweet)
+	DB.insertTweet(request.user, tweet)
+	return success
+
+Storage 存储 – Push Model
+算法: 为每个用户建一个List存储他的News Feed信息 用户发一个Tweet之后，将该推文逐个推送到每个用户的News Feed List中 关键词:Fanout 用户需要查看News Feed时，只需要从该News Feed List中读取最新的100条即可
+复杂度分析: News Feed => 1次DB Read Post a tweet => N个粉丝，需要N次DB Writes 好处是可以用异步任务在后台执行，无需用户等待
+
+News Feed Table
+id integer
+owner_id Foreign Key
+tweet_id Foreign Key
+created_at timestamp
+
+getNewsFeed(request)
+	return DB.getNewsFeed(request.user)
+
+postTweet(request, tweet_info)
+	tweet = DB.insertTweet(request.user, tweet_info)
+	AsyncService.fanoutTweet(request.user, tweet)
+	return success
+
+AsyncService::fanoutTweet(user, tweet)
+	followers = DB.getFollowers(user)
+	for follower in followers: 					# followers的数 目可能很大 
+		DB.insertNewsFeed(tweet, follower)
+
+Scale 扩展 – 解决Pull的缺陷
+最慢的部分发生在用户读请求时(需要耗费用户等待时间)
+在DB访问之前加入Cache 	-  	see Facebook's newsfeed How to generate new newsfeed
+Cache每个用户的Timeline
+Cache 每个用户的 News Feed
+
+Scale 扩展 – 解决Push的缺陷
+浪费更多的存储空间 Disk
+不活跃用户 Inactive Users 粉丝排序 Rank followers by weight (for example, last login time)
+粉丝数目 followers >> 关注数目 following 尝试在现有的模型下做最小的改动来优化 比如多加几台用于做 Push 任务的机器，Problem Solved! 对长期的增长进行估计，并评估是否值得转换整个模型
+
+Push 结合 Pull 的优化方案
+• 普通的用户仍然 Push
+• 将 Lady Gaga 这类的用户，标记为明星用户
+• 对于明星用户，不 Push 到用户的 News Feed 中
+• 当用户需要的时候，来明星用户的 Timeline 里取，并合并到 News Feed 里
+
+如何定义明星
+是不是明星不能在线动态计算，要离线计算
+为 User 增加一个 is_superstar 的属性
+• 一个用户被标记为 superstar 之后，就不能再被取消标记
+
+拓展问题1:果取关问题
+Follow 一个用户之后，异步地将他的 Timeline 合并到你的 News Feed 中 • Merge timeline into news feed asynchronously.
+Unfollow 一个用户之后，异步地将他发的 Tweets 从你的 News Feed 中移除 • Pick out tweets from news feed asynchronously.
+
+拓展问题2:如何存储 likes?
+Tweet Table
+id integer
+user_id Foreign Key
+content text
+created_at timestamp
+num_of_likes * integer
+num_of_comments * integer
+num_of_retweets * integer
+Denormalize 获得点赞数的方式:
+当有人点赞的时候:
+UPDATE like_table SET num_of_likes = num_of_likes + 1 where tweet_id = xxx 当有人取消赞的时候:
+UPDATE like_table SET num_of_likes = num_of_likes - 1 where tweet_id = xxx 想要获得一个 Tweet 的点赞数时，因为 num_of_likes 就存在 tweet 里，故无需额外的 SQL Queries
+
+拓展问题3:惊群现象 Thundering Herd
+
+
+
+jiuzhang 2: user system
+MySQL / PosgreSQL 等 SQL 数据库的性能
+• 约 1k QPS 这个级别
+• MongoDB / Cassandra 等 硬盘型NoSQL 数据库的性能
+• 约 10k QPS 这个级别
+• Redis / Memcached 等 内存型NoSQL 数据库的性能
+• 100k ~ 1m QPS 这个级别
+• 以上数据根据机器性能和硬盘数量及硬盘读写􏰀度会有区别
+
+用户系统特点 读非常多，写非常少 一个读多写少的系统，一定要使用 Cache 进行优化
+Memcached 如何优化 DB 的查询
+class UserService:
+	def getUser(self, user_id):
+		key = "user::%s" % user_id
+		user = cache.get(key)
+		if user:
+		return user
+		user = database.get(user_id)
+		cache.set(key, user)
+		return user
+
+	def setUser(self, user):
+		key = "user::%s" % user.id
+		cache.delete(key)
+		database.set(user)
+
+A: database.set(user); cache.set(key, user);  -> Dirty Data
+B: database.set(user); cache.delete(key);  	  -> Dirty Data
+C: cache.set(key, user); database.set(user);  -> Dirty Data
+D: cache.delete(key); database.set(user); 	  -> 多线程多进程下的数据不一致  在setUser 执行到14行和15行之间的时候 另外一个进程执行了getUser 此时 cache 里的数据是旧数据
+解决办法
+可以给数据库和缓存的两个操作加锁么? 不行，数据库和缓存是两台机器，两套系统，并不支持加锁 如果是用一些第三方分布式锁，会导致存取效率降低，得不偿失
+dirty read vs nonrepeatable read vs phantom
+https://docs.microsoft.com/en-us/sql/odbc/reference/develop-app/transaction-isolation-levels?view=sql-server-ver15
+
+Best practice: 
+database.set(key, user); cache.delete(key)
+问题1:在多线程多进程的情况下依旧会出问题 在getUser执行到第9行和第10行之间时 另外一个进程执行了 setUser()，cache 里会放入旧数据 
+问题2:db set 成功，cache delete 失败
+好处:上面这两种情况发生概率都远低于 cache.delete + db.set 为什么? read requests are more frequent
+
+如何“解决”一致性问题
+巧妙利用 cache 的 ttl(time to live / timeout) 机制 任何一个 cache 中的 key 都不要永久有效，设置一个短暂的有效时间，如 7 天 那么即便在极低概率下出现了数据不一致，也就最多不一致 7 天
+即，我们允许数据库和缓存有“短时间”内的不一致，但最终会一致。
+
+如果写很多怎么办? 在每次数据修改的时候，我们会在 cache 中 delete 这个数据
+如果写很多，甚至写多读少，那么此时 cache 是没有任何优化效果的
+
+cache aside/cache through
+
+authentication
+session
+• 用户 Login 以后，为他创建一个 session 对象
+• 并把 session_key 返回给浏览器，让浏览器存储起来
+• 浏览器将该值记录在浏览器的 cookie 中
+• 用户每次向服务器发送的访问，都会自动带上该网站所有的 cookie
+• 此时服务器拿到 cookie 中的 session_key，在 Session Table 中检测是否存在，是否过期
+session table
+session_key 	string 		一个 hash 值，全局唯一，无规律
+user_id 		foreign key 指向 User Table
+expired_at 		timestamp 	什么时候过期
+
+ Session 三问
+1. Session 记录过期以后，服务器会主动删除么? No. If later user has another session simply updated expired_at
+2. 只支持在一台机器登陆和在多台机器同时登陆的区别是什么? Add device column (enum) for multiple device login
+3. Session 适合存在什么数据存储系统中? Redis/memcache fast even lost we can create a new one it's not critical
+
+Friendship service
+单向好友关系 
+from_user_id 	Foreign key 	用户主体
+to_user_id 		Foreign key 	被关注的人
+
+双向好友关系
+方案2:存储为两条数据
+• select * from friendship where from_user_id=x
+• NoSQL 和 SQL 都可以按照这种方案
+Cassandra
+Cassandra 是一个三层结构的 NoSQL 数据库
+• 第一层:row_key
+• 第二层:column_key
+• 第三层:value
+• Cassandra 的 Key = row_key + column_key
+• 同一个 row_key + column_key 只对应一个 value
+结构化信息如何存储?
+• 将其他需要同时存储的数据，序列化(Serialize)到 value 里进行存储
+Row Key
+又称为 Hash Key, Partition Key Cassandra 会根据这个 key 算一个 hash 值 然后决定整条数据存储在哪儿 无法进行 Range Query 常用:user_id
+Column Key
+insert(row_key, column_key, value)
+任何一条数据，都包含上面三个部分 你可以指定 column_key 按照什么排序 Cassandra 支持这样的“范围查询”: query(row_key, column_start, column_end) 可以是复合值，如 timestamp + user_id
+
+以 Cassandra 为例看看 Friendship Table 如何存储
+row_key 					user_id1
+column_key 		friend_user_id2  	friend_user_id2
+value 			<is_mutual_friend, is_blocked, timestamp>
+
+Cassandra 如何存储 NewsFeed
+row_key 					owner_id1
+column_key 		<created_at1, tweet_id1>, 	<created_at2, tweet_id2>
+value 			<tweet_data1> 				<tweet_data2>
+
+SQL vs NoSQL
+数据库选择原则1 大部分的情况，用SQL也好，用NoSQL也好，都是可以的
+数据库选择原则2 需要支持 Transaction 的话不能选 NoSQL
+数据库选择原则3 你想在什么地方偷懒很大程度决定了选什么数据库 SQL:结构化数据，自由创建索引 NoSQL:分布式，Auto-scale，Replica
+数据库选择原则4 一般一个网站会同时用多种数据库系统 不同的表单放在不同的数据库里
+User Table 存在哪儿? 大部分公司选择了 SQL 原因:信任度，Multi-Index
+Friendship 存在哪儿? 大部分公司选择了 NoSQL 原因:数据结构简单，都是 key-value 的查询/存储需求 NoSQL效率更高
+
+
+
+jiuzhang 3: sharding / consistent hash
+除了QPS，还有什么需要考虑的? 假如用户的 QPS 有 1k Database 和 Web Server 假设也均能够承受 1k 的 QPS 还有什么情况需要考虑?
+Single Point Failure
+1. 数据拆分 Sharding(又名 Partition)
+2. 数据复制 Replica
+
+数据拆分 Sharding
+又名 Partition 方法:按照一定的规则，将数据拆分开存储在不同的实体机器上。 意义:
+1. 挂了一台不会全挂
+2. 分摊读写流量
+
+数据复制 Replica
+方法:一式三份(重要的事情写三遍) 意义:
+1. 一台机器挂了可以用其他两台的数据恢复 
+2. 分摊读请求
+
+猜想1:新数据放新机器，旧数据放旧机器
+比如一台数据库如果能放下 1T 的数据 那么超过1T之后就放在第二个数据库里 以此类推 问:这种方法的问题是什么? most read request are reading latest data, server store lastest data will have more pressure
+猜想2:对机器数目取模
+假如我们来拆分 Friendship Table 我们有 3 台数据库的机器 于是想到按照 from_user_id % 3 进行拆分 这样做的问题是啥? rehashing data migration
+过多的数据迁移会􏰁成的问题 
+1. 慢，容易成数据的不一致性
+2. 迁移期间，服务器压力增大，容易挂
+
+consistent hash
+无论是 SQL 还是 NoSQL 都可以用这个方法进行 Sharding 注:大部分 NoSQL 都帮你实现好了这个算法，帮你自动 Sharding
+很多 SQL 数据库也逐渐加入 Auto-scaling 的机制了，也开始帮你做 自动的 Sharding
+
+一个简单的一致性Hash算法
+• 将 key 模一个很大的数，比如 360
+• 将 360 分配给 n 台机器，每个机器负责一段区间
+• 区间分配信息记录为一张表存在 Web Server 上
+• 新加一台机器的时候，在表中选择一个位置插入，匀走相邻两台机器的一部分数据
+• 比如n从2变化到3，只有1/3的数据移动
+
+we have 3 servers, mod 360
+server1: 0 - 119, server2: 120 - 239, server3: 240 - 359
+add 4th server between server 2 and 3
+server1: 0 - 119, server2: 120 - 199, server3: 200 - 279, server4: 280 - 359
+缺陷1 数据分布不均匀 因为算法是“将数据最多的相邻两台机器均匀分为三台”
+比如，3台机器变4台机器时，无法做到4台机器均匀分布
+缺陷2 迁移压力大 新机器的数据只从两台老机器上获取
+导致这两台老机器负载过大
+
+一致性哈希算法 Consistent Hashing
+• 将取模的底数从 360 拓展到 2^64
+• 将 0~2^64-1 看做一个很大的圆环(Ring)
+• 将数据和机器都通过 hash function 换算到环上的一个点
+• 数据取 key / row_key 作为 hash key
+• 机器取MAC地址，或者机器固定名字如database01，或者固定的 IP 地址
+• 每个数据放在哪台机器上，取决于在Consistent Hash Ring 上顺时针碰到的 下一个机器节点
+
+• 引入分身的概念(Virtual nodes)
+• 一个实体机器(Real node) 对应若干虚拟机器(Virtual Node)
+• 通常是 1000 个
+• 分身的KEY可以用实体机器的KEY+后缀的形式
+• 如 database01-0001
+• 好处是直接按格式去掉后缀就可以得到实体机器
+• 用一个数据结构存储这些 virtual nodes
+• 支持快􏰀的查询比某个数大的最小数 • 即顺时针碰到的下一个 virtual nodes
+• 哪种数据结构可以支持? 	Treemap
+
+backup vs replica - https://www.rubrik.com/insights/difference-between-backup-and-replication
+backup: periodically, usually can only go back to a certain point in history. It does not split read request
+replica. more like real time on going basis. Split read request
+why need backup? Because replicated data is updated on an ongoing basis, it doesn’t provide a historical state of a company’s business records like data backup does
+
+MySql replica
+Master - Slave (write ahead log)
+• SQL 数据库的任何操作，都会以 Log 的形式做一份记录 • 比如数据A在B时刻从C改到了D
+• Slave 被激活后，告诉master我在了
+• Master每次有任何操作就通知 slave 来读log
+• 因此Slave上的数据是有“延迟”的
+Master 挂了怎么办?
+• 将一台 Slave 升级 (promote) 为 Master，接受读+写 • 可能会􏰁成一定程度的数据丢失和不一致
+
+NoSql replica
+以 Cassandra 为代表的 NoSQL 数据库 通常将数据“顺时针”存储在 Consistent hashing 环上的三个 virtual nodes 中
+
+实战1:User Table 如何 Sharding 如果我们在 SQL 数据库中存储 User Table那么按照什么做 Sharding ?
+How to shard data based on how to query data 绝大多数请求:select * from user_table where user_id=xxx 问如果我需要按照 username 找用户怎么办?
+User Table Sharding 的几个问题
+• User Table Sharding 之后，多台数据库无法维护一个全局的自增ID怎么办? 
+	• 手动创建一个 UUID 来作为用户的 user_id
+• 创建用户时还没有用户的 user_id，如何知道该去哪个数据库创建呢?
+	• Web Server 负责创建用户的 user_id，如用 UUID 来作为 user_id
+	• 创建之后根据 consistent_hash(user_id) 的结果来获得所在的实体数据库信息
+ 
+实战2: Friendship Table 如何 Sharding
+实战3:Session Table 如何 Sharding
+实战4:News Feed / Timeline 按照什么 Sharding?
+实战5:LintCode Submission 按照什么 Sharding
+
+
+
+jiuzhang 4: Api / tinyurl
+
+当你访问 www.google.com 的时候发生了什么
+1. go to DNS and get IP
+2. send http/https to that IP
+3. web server(硬件) receive request and forward to Http server(软件)
+4. Http server pass to web application
+5. process logic for certain route
+6. send response
+
+Rest API
+你要获取的数据是什么，路径的主目录就是什么
+REST 练习2:创建转账记录
+POST /api/transaction/?from=1&to=2&money=500
+ 
+面试真题: Design News Feed API
+面试官提问1:设计 News Feed List 的 Web API 请求格式?  
+GET https://www.facebook-or-twitter.com/api/newsfeed/
+
+面试官提问2:设计API 的返回格式? Json
+
+面试官提问3:如何设计翻页 Pagination?
+传统翻页方法:?page=1
+优点:可以直接跳转到第 x 页 缺点:如果有新数据被插入时，翻到下一页可能会看到上一页的内容 适用于用户希望查阅很久以前的内容的使用场景
+NewsFeed 是否适用? No
+News Feed 一般不会采用页码进行翻页 而是采用无限翻页 Endless Pagination
+/api/newsfeed/?max_id=1000
+没有 max_id 表示第一页
+有 max_id 找到所有 id <= max_id 的最顶上的一页的数据(假设倒序)
+max id可以是单调递增的id id越大数据越新
+面试官提问3.1:如何判定有没有下一页? 当 response 里什么数据都没有时表示没有下一页 问:这种方法有什么问题?
+正确方法:
+每次多取一个数据，如果取到，把这个数据作为 next_max_id 返回给前端
+PAGE_SIZE = 20
+从 request 中获取 max_id if 没有 max_id
+获得最新的 PAGE_SIZE + 1 条数据 else
+获得 id <=max_id 的最新的 PAGE_SIZE + 1 条数据 如果获取到的数据为 21 条，将第21条的 id 赋值给 next_max_id
+否则 next_max_id = null
+返回数据:
+{
+'next_max_id': next_max_id,
+'items': [...最多 PAGE_SIZE 条数据]
+}
+一共有100条数据 page size=20 第一页100 - 80 第二页获得 id <=80 的最新的 PAGE_SIZE + 1 条数据 60 - 80
+面试官提问3.2:如何获得更新内容 GET /api/newsfeed/?min_id=<id> 找到所有 id > 目前客户端里最新的一条帖子的 id 的所有帖子
+
+面试官提问4:设计 Mentions 的数据格式
+ 推荐方法:自定义链接结构 如 <user username=“someone”>Hello World</user> 让 Web 和 Mobile 分别对该格式进行解析 解析成各自平台认识的格式
+
+Design tinyUrl
+
+
+
+
+jiuzhang 5: GEO service
+
+---------------- Final Solution
+
+Scenario
+drivers report their location every 4s (write could be huge)
+user request a ride and find a nearby matched driver
+• Driver deny / accept a request
+• Driver cancel a matched request 
+• Rider cancel a request
+• Driver pick up a rider / start a trip • Driver drop off a rider / end a trip
+
+Service
+Dispatch service: 1. save driver's location in Geo Service every 4s 	2. Find nearby matched drivers for a user
+Geo service: store driver location
+
+Storage
+cassandra to store geo information (we need to handle lots of writes)
+Location Table
+row key: 	geohash
+columns: 	driver_id, 	lat, 	lng, 		status, 	updated_at, 	trip_id
+value: 		1234 		10,8 	11.224342 	available 	
+
+User Table (RDBMS)
+user_id 	name 	ratings
+
+Trip Table 	(RDBMS)
+id 						pk 					primary key
+rider_id 				fk 					user id
+driver_id 				fk 					user id
+start_lat 				float 				起点的纬度 Latitude
+start_lng 				float 				起点的经度 Longitude
+end_lat 				float 				终点的维度 Latitude
+end_lng 				float				终点的经度 Longitude
+created_at 				timestamp 			创建时间
+status 					int 				New request / waiting for driver / on the way to pick up / in trip / cancelled / ended
+
+
+
+--------------------------------
+
+
+design Uber / Yelp
+Scenario
+第一阶段:
+• Driver report locations
+• Rider request Uber, match a driver with rider
+第二阶段:
+• Driver deny / accept a request
+• Driver cancel a matched request 
+• Rider cancel a request
+• Driver pick up a rider / start a trip • Driver drop off a rider / end a trip
+假设同时在线的司机平均约为 600k(猜的) • Average Driver QPS = 600k / 4 = 150k
+• Driver report locations by every 4 seconds Peak Driver QPS = 150k * 2 = 300k 初步感觉:300k 的写操作是不容小 觑的 必须找一个写速度快的存 储!
+ Uber 主要干的事情就两件
+• 记录车的位置 GeoService
+• 匹配打车请求 DispatchService
+
+Driver   ---> report locations every 4s ---> Dispatch Service ---> Save location 		---> Geo Service
+		 <--- return matched rider 	   <---          		
+Rider 	 ---> Request Uber 									---> find drivers nearby
+		 <--- return matched driver
+
+Storage 存储 —— Schema 细化数据表单
+Location Table (= Driver Table)			type 				comments
+driver_id 								fk 					Primary Key
+lat 									float 				纬度
+lng 									float 				经度
+updated_at 								timestamp 			存最后更新的时间
+ 	
+Trip Table 				type 				comments
+id 						pk 					primary key
+rider_id 				fk 					user id
+driver_id 				fk 					user id
+start_lat 				float 				起点的纬度 Latitude
+start_lng 				float 				起点的经度 Longitude
+end_lat 				float 				终点的维度 Latitude
+end_lng 				float				终点的经度 Longitude
+created_at 				timestamp 			创建时间
+status 					int 				New request / waiting for driver / on the way to pick up / in trip / cancelled / ended
+
+LBS 类系统的难点: 如何存储和查询地理位置信息? 如查询某个乘客周围 X 公里内的司机
+查询地理位置信息 Naive Solution
+SELECT * FROM Location WHERE lat < myLat + delta AND lat > myLat - delta AND lng < myLng + delta AND lng > myLng - delta;
+问:分别对 lat 和 lng 建 index 是否可行?
+复合索引 Composite Index 能否 解决问题?
+什么是复合索引 —— 将多个 columns 合并起来做索引 create index lat_lng_idx on location_table(lat, lng); 不行，复合索引只能解决 “lat=固定值 and lng 在某个范围” 的查询
+数据库的 index 只能解决一个维 度上的 Range Query 多个独立的维度的 Range Query 无法高效查询 解决思路:把二维映射到一维
+
+如何存储和查询地理位置信息?
+Geohash / Google S2
+Geohash - Peano Curve / Based32 0-9 a-z (a, i, l, o) 核心思路二分法 特性:公共前缀越长，两个点越接近 Example: (-30.043800, -51.140220) → 6feth68y4tb0
+https://www.cnblogs.com/LBSer/p/3310455.html
+• 北海公园:lat=39.928167, lng=116.389550
+• 二分(-180,180) 逼近经度་左半部记0་右半部记1
+• (-180, 180)里116.389550在右半部 → 1
+• (0, 180)里116.389550在右半部 → 1
+• (90, 180)里116.389550在左半部 → 0
+• (90, 135)里116.389550在右半部 → 1
+• (112.5, 135)里116.389550在左半部 → 0
+• 二分(-90,90) 逼近纬度，下半部记0，上半部记1 • (-90,90) 里 39.928167 在上半部 → 1
+• (0,90) 里 39.928167 在下半部 → 0
+• (0,45) 里 39.928167 在上半部 → 1
+• (22.5,45) 里 39.928167 在上半部 → 1
+• (33.75,45) 里 39.928167 在上半部 → 1 • ... (还可以继续二分求获得更多的精度༉
+先经后纬，经纬交替 -> 11100 11101
+					W 		X
+
+查询Google半径2公里内的车辆
+Google HQ: 9q9hvu7wbq2s 找到位置以9q9hv以开头的所有车辆 怎样在数据库中实现该功能?
+
+Storage 存储
+SQL 数据库
+• 首先需要对 geohash 建索引
+• CREATE INDEX on geohash;
+• 使用 Like Query
+• SELECT * FROM location WHERE geohash LIKE` 9q9hv%`;
+NoSQL - Cassandra
+• 将 geohash 设为 column key
+• 使用 range query (9q9hv0, 9q9hvz)
+NoSQL - Redis
+• Driver 的位置分级存储
+• 如Driver的位置如果是9q9hvt，则存储在9q9hvt，9q9hv，9q9h这3个key中 • 6位geohash的精度已经在一公里以内，对于Uber这类应用足够了
+• 4位geohash的精度在20公里以上了，再大就没意义了，你不会打20公里以外的车
+• key = 9q9hvt, value = set of drivers in this location
+NoSql - redis
+数据可持久化 原生支持list，set等结构 读写速度接近内存访问速度 >100k QPS
+
+打车用户的角度
+用户发出打车请求，查询给定位置周围的司机
+• (lat,lng) → geohash → [driver1, driver2, ...]
+• 先查6位的geohash་找0.6公里以内的
+• 如果没有་再查5位的geohash་找2.4公里以内的 • 如果没有་再查4位的geohash་找20公里以内的
+		Location Table
+key 	geohash
+value 	{driver1_id, driver2_id, driver3_id...}
+• 匹配司机成功，用户查询司机所在位置 • driver1 → (lat, lng)
+		Driver Table
+key 	driver_id 	----------------------------->  指向UserTable，UserTable存在其他 数据库中，可以是SQL数据库
+value 	{lat, lng, status, updated_at, trip_id}
+
+司机的角度
+• 司机汇报自己的位置
+	• 计算当前位置 lat, lng的geohash
+	• geohash4, geohash5, geohash6
+	• 查询自己原来所在的位置			\
+	• geohash4’,geohash5’, geohash6’-> 	对比是否发生变化 并将变化的部分在 Redis 中进行修改
+• 司机接受打车请求
+	• 修改 Trip 状态
+	• 用户发出请求时就已经在 Trip Table 中创建一次旅程་并Match上最近的司机
+	• 在Driver Table 中标记自己的状态进入不可用状态
+• 司机完成接送་结束一次Trip
+	• 在 Trip Table 中修改旅程状态
+	• 在Driver Table 中标记自己的状态进入可用状态
+
+workable solution
+1. 乘客发出打车请求，服务器创建一次Trip 将 trip_id 返回给用户 乘客每隔几秒询问一次服务器是否匹配成功
+2. 服务器找到匹配的司机，写入Trip，状态为等待司机回应 同时修改 Driver Table 中的司机状态为不可用，并存入对应的 trip_id
+3. 司机汇报自己的位置 顺便在 Driver Table 中发现有分配给自己的 trip_id  去Trip Table 查询对应的 Trip，返回给司机
+4. 司机接受打车请求 修改 Driver Table, Trip 中的状态信息 乘客发现自己匹配成功，获得司机信息
+5. 司机拒绝打车请求 修改 Driver Table，Trip 中的状态信息，标记该司机已经拒绝了该trip 重新匹配一个司机，重复第2步
+
+DB sharding  传统做法:按照前4位 Geohash 数据怎么查询就怎么拆分
+Uber 的做法:按城市 Sharding 难点1:如何定义城市? 难点2:如何根据位置信息知道用户在哪个城市?
+Geo Fence 用多边形代表城市的范围 问题本质:求一个点是否在多边形内
+https://eng.uber.com/go-geofence-highest-query-per-second-service/
+
+How to reduce impact on db crash? 多台 Redis 虽然能减少损失 但是再小的机器挂了，都还是会影响
+方法1:Redis Master Slave 每个 Master下挂两个Slave Master挂了 Slave就顶上
+方法2:让更强大的 NoSQL 数据库来处理 既然一定要用多台机器的话，我们可以用 1000 台 Cassandra / Riak 这样的 NoSQL 数据库，平均每台分摊 300 的 QPS 就不大了
+这类数据库会帮你更好的处理 Replica 和挂掉之后恢复的问题
+
+
+
+
+jiuzhang 6: chat system (Design Facebook Messenger, WhatsApp, Wechat)
+ • 基本功能:
+	• * 用户登录注册
+	• * 通讯录
+	• 两个用户互相发消息 
+	• 群聊
+• 其他功能:
+	• 限制多机登陆或者支持多机登陆
+	• * 用户在线状态
+
+Message Table (Naive design)
+id 							int
+from_user_id 				int 			谁发的
+to_user_id 					int 			发给了谁
+content 					text 			发了啥
+created_at 					timestamp 		啥时候发的
+如果按照上面的 Message Table，那么要查询 A 与 B 之间的对话，则需要如下的语句:
+SELECT * FROM message_table
+WHERE from_user_id=A and to_user_id=B OR from_user_id=B and to_user_id=A ORDER BY created_at DESC;
+问题1:WHERE 语句太复杂，导致SQL效率低下 
+问题2:如果是多人聊天群，这种结构不可扩展
+
+增加 Thread Table
+Thread Table
+id 							int
+participant_user_ids 		text 			比如 [1,2]，表示是1和2之间的对话
+created_at 					timestamp
+updated_at 					timestamp 		index=true
+
+Message Table
+id 							int
+thread_id 					int
+user_id 					int 			谁发的
+content 					text 			发了啥
+created_at 					timestamp 		啥时候发的
+
+问题1:如何取某个 Thread 下的所有 Message?
+SELECT * FROM message_table
+WHERE thread_id=12345 —— 筛选属于某个 Thread 的信息 ORDER BY created_at DESC —— 按照时间倒序排列
+LIMIT 20 —— 取最近20条
+
+有一些Thread信息是私有的 is_muted(是否被静音) unread_count(未读信息数)
+方法1:拆成多张表 Thread - 存储基本信息 UserThread - 存储 User 在 Thread 上的私有信息
+Thread Table
+id 							primary key 	bigint
+last_message 				text
+avatar 						varchar
+created_at 					timestamp
+
+User Thread Table
+id 							primary key 	bigint
+user_id 					foreign key
+thread_id 					foreign key
+unread_count 				int
+is_muted 					boolean
+updated_at 					timestamp 		什么时候更新
+joined_at 					timestamp 		什么时候加入对话
+
+当用户 A 给用户 B 发消息的时候，可能并不知道他们之间的thread_id 是什么，如何在服务器上查询?
+在 Thread Table 中增加一个 participants_hash_code 该值由所有参与者的user_id排序之后hash得到
+partcipants_hash_code = any_hashfunc(sorted(participants_user_ids)) 不直接使用排序之后的 user_ids 是因为如果是群聊的话，会太长 如果只需要考虑两人对话的话，可以自定义一个格式:private::user1::user2 采用uuid之类的hash方式则不需要考虑hash collision的问题
+
+storage 
+Mesasge Table (NoSQL) 
+• 数据量很大，不需要修改，一条聊天信息就像一条log一样 
+• 问:sharding key (row key)是什么?
+• 存储结构:
+• row_key = thread_id
+• column_key = created_at 因为要按照时间倒序 • value = 其他信息
+
+Thread Table (SQL/NoSQL)
+• Thread Table 存储公有的 Thread 信息
+• 如果使用 SQL 需要同时 index by
+• thread_id用于查询某个对话的信息
+• participant_hash_code用户查询某些用户之间是否已经有thread
+• 问:如果使用 NoSQL 该如何存储?
+
+• 如果使用 NoSQL 存储 Thread Table 并同时支持按照 thread_id 和participant_hash_code 进行查询，我们需要两张表:
+• 表1:Thread Table
+• row_key = thread_id
+• column_key = null
+• value = 其他的基本信息
+• 表2:ParticipantHashCode Table
+• row_key = participant_hash_code
+• column_key = null
+• value = thread_id
+• 因为这里用不到 range query, 也就用不到 column key，因此也可以选择 如 RocksDB 这样的纯 key-value 的 NoSQL。
+
+• UserThread Table (NoSQL，基于方法1)
+• UserThread Table 存储私有的 Thread 信息
+• 用什么做 sharding key(row_key)?
+• 存储结构:
+• row_key = user_id
+• column_key = updated_at 按照更新时间倒序
+• value = 其他信息
+
+一个可行解的流程
+• 用户 A 发送一条消息给 用户 B
+• 服务器收到消息，查询是否有 A 和 B 的对话记录(Thread)，如果没有则创建对应的 Thread • 根据 Thread id 创建 Message
+• B 每隔 10s 访问一次服务器获取最新的信息(Poll)
+• B 收到信息
+
+Pull vs Poll
+Pull: Client主动问 server 读/写 数据的行为
+Poll: Client 每隔一段时间就问 server 读/写 数据的行为
+有没有更好的信息更新方式? 每隔10秒钟收一次消息太慢了，聊天体验很差，不实时
+Push Notification Android GCM (Google Cloud Messaging) iOS APNS (Apple Push Notification Service) 手机自己的消息推送系统  这个方法有什么局限性? 无法支持 Web 端
+
+Socket 
+让服务器可以主动向客户端推送数据的技术 HTTP 只支持客户端向服务器获取数据
+• 用户A打开App后，问 Web Server 要一个 Push Service 的连接地址 
+• A通过 socket 与push server保持连接
+• 用户B发消息给A，消息先被发送到服务器
+• 服务器把消息存储之后，告诉 Push Server 让他通知 A
+• A 收到及时的消息提醒
+
+Group Chat (hard)
+• 增加一个Channel Service(频道服务)
+• 为每个聊天的Thread增加一个Channel信息
+• 对于较大群，在线用户先需要订阅到对应的 Channel 上
+	• 用户上线时，Web Server (message service) 找到用户所属的频道(群)，并通知 Channel Service 完成订阅
+	• Channel就知道哪些频道里有哪些用户还活着
+	• 用户如果断线了，Push Service 会知道用户掉线了，通知 Channel Service 从所属的频道里移除
+• Message Service 收到用户发的信息之后 
+	• 找到对应的channel
+	• 把发消息的请求发送给 Channel Service 
+	• 原来发500条消息变成发1条消息
+• Channel Service 找到当前在线的用户
+	• 然后发给 Push Service 把消息 Push 出去
+Channel Service Q & A
+Q: Channel Service 中的数据是什么结构?
+A: key-value 的结构。key 为 channel name，可以是一个字符串比如 “#personal::user_1”。value是一个set 代表哪些人订阅到了这个 channel 下。
+Q: Channel Service 用什么数据存储?
+A: 根据上面所提到的 key-value 结构以及 value 需要是一个 set，Redis 是一个很好的选择。 
+Q: 如何知道一个用户该订阅到哪些 Channels?
+A: 首先用户需要订阅自己的 personal channel，如 #personal::user_1，与该用户有关的私聊信息都在这 个 channel 里发送。小于一定人数的群聊可以依然通过 personal channel 推送，超过一定人数的群聊， 可以采用 lazy subscribe 的方式，在用户打开 APP 且群处于比较靠前的位置的时候才订阅，用户没有主 动订阅的群聊靠 Poll 的模式获取最新消息。
+Q: 用户关闭 APP 以后还能收到提醒么?
+A: 如果真的关闭了 APP 是不行的。所以很多 APP 会常驻后台，保证至少 Poll 模式还能工作即可。
+
+拓展问题1:多机登录 multiple session
+考虑我们的使用场景:
+1. 不允许两个手机同时登录微信
+2. 允许手机和桌面客户端或Web微信同时登录
+解决办法:在 session 中记录用户的客户端信息
+
+拓展问题2:如何支持用户在线状态显示? 是否可以用 Push Server 中的 socket 连接情况? 
+缺陷1:如果用户的网络不稳定，会导致连接时断时连
+缺陷2:如果在 Push Service 中使用数据库来存储在线信息，Push Service 的结构会变得复杂，通用性 会变差，依赖会增多。
+• 使用数据库存储 online status 的信息
+• 使用 Web Server 直接访问数据库的获取该信息
+• 问: OnlineStatus Table 中存储什么信息?
+• 存如下一些信息足够: <user, last_updated_at, client_info>
+• 类似于在打车软件设计中，我们提到的司机在线状态的更新
+ 
+是 Pull 还是 Push? 是用户主动告诉服务器我在线，还是服务器询问用户是否在线?
+原因:
+1. Pull 更简单，依赖更少(不依赖于 Push Service)，代码量更少
+2. 在告诉服务器我在线的时候，还可以顺带更新所有好友的在线状
+况，用于客户端显示
+a. 更新好友在线状态如果用 Push 的方式来做存在很多问题，比如用
+户如果掉线了，还需要由 Push Server 通知 Web Server 来更新在 线状态，然后再通过 Web Server 通知所有的好友他掉线了。
+ 是 Pull，每隔3-5s send 一次(heartbeat) Pull 更简单，依赖更少
+
+
+
+
+jiuzhang 7: Distributed File System: GFS / HDFS
+master slave vs peer to peer
+how to save a file in one machine ?
+Metadata (File Info: name/createdtime/size 	index block1 -> diskOffset1, ...)  	+ 	blocks (block1, ...)
+1 block = 4096bytes
+how to store a large file in one machine ? split file into chunks
+1 chunk = 64M
+bigger chunk can reduce size of metadata but will waste space for small files
+how to store an extra large file in several machine ? One master + many chunk servers (slave servers). The master don't record disk offset of a chunk (reduce size of metadata in master and traffic btw master and chunk server)
+Master 存储10P 文件的metadata 需要多少容量? 1 chunk = 64MB needs 64B. (经验值) 10P needs 10G
+How to write a file?
+要修改Dengchao.mp4怎么办? One time to write, Many time to read. 先删掉/gfs/home/dengchao.mp4 重新把整个文件重写一份
+How to read a file?
+Scale
+Single Master Failure
+How to identify whether a chunk on the disk is broken? checksum (MD5, SHA1, SHA246, SHA512)
+什么时候写入checksum? Answer: 写入一块chunk的时候顺便写入
+什么时候检查checksum? Answer: 读入这一块数据的时候检查 1. 重新读数据并且计算现在的checksum 2. 比较现在的checksum和之前存的checksum是否一样
+How to avoid data loss when a Chunk Server is down/fail? Replica
+需要多少个备份? 每个备份放在哪? 两个备份相对比较近，另一个放在较远的地方(2个加州，1个滨州)
+How to recover when a chunk is broken? Answer: Ask master for help
+How to find whether a Chunk Server is down? Answer: Heart Beat. chunk servers send heartbeat to master, master also needs to send heartbeat to slaves so they know each other all live
+Whether write to only one server is safe?
+How to solve Client bottleneck? 怎么样选队长? 1. 找距离最近的(快) 2. 找现在不干活的(平衡traffic)
+How to solve Chunk Server failure? retry
+
+
+
+jiuzhang 8:
+Design a BigTable
+
+硬盘中排序+二分查询
+split file into n chunks so each chunk can be read into memory. Sort each chunk solely and do a merge sort n sorted chunks
+external sorting
+https://zh.wikipedia.org/wiki/%E5%A4%96%E6%8E%92%E5%BA%8F
+
+修改文件内容
+不修改，直接append操作追加一条记录“令狐冲颜值=6”在文件最后面 BigTable为了写优化 选择了直接Append 坏处: 读取数据怎么办:1.怎么识别哪个是最新的记录 2.没有顺序怎么二分?
+怎么识别哪个是最新的记录 ? 时间戳最大的那个就是真正的数据
+没有顺序怎么二分? 分块有序 1. 每一块都是内部有序 2. 写的时候只有最后一块是无序的，并且隔一段时间整理成有序
+块会越写越多，会有很多重复 ? 定期K路归并
+怎么把最后一个File 从无序变成有序? 可不可以一开始就存在内存里面? 内存排序+1次硬盘写入
+
+Interviewer: 机器挂了，内存没了?
+write ahead log
+http://www.larsgeorge.com/2010/01/hbase-architecture-101-write-ahead-log.html
+https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html
+
+读出过程
+一个File里面怎么查询令狐冲? 建立Index
+有没有更好的方法检查一个key在 不在一个File里面?
+bloomfilter
+https://en.wikipedia.org/wiki/Bloom_filter
+
+memtable is implemented by skip list
+skip list
+https://en.wikipedia.org/wiki/Skip_list
+
+sstable
+An SSTable is a simple abstraction to efficiently store large numbers of key-value pairs while optimizing for high throughput, sequential read/write workloads
+http://zouzls.github.io/2016/11/23/LevelDB%E4%B9%8BLSM-Tree/
+https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/
+https://www.cnblogs.com/fxjwind/archive/2012/08/14/2638371.html
+
+
+sharding
+how do we read from BigTable ?
+how do we write BigTable ?
+
+distributed lock
+zookeeper
+
+LSMTree (log-structured merge tree) levelDB
+SSTable: fast write 可以看出对于SSTable, 相对写操作，读操作处理起来要复杂很多，所以写的速度必然要远远高于读数据的速度，也就是说，LevelDb比较适合写操作多于读操作的应用场合
+random writes are fast when the SSTable is in memory (let's call it MemTable), and if the table is immutable then an on-disk SSTable is also fast to read from
+1. On-disk SSTable indexes are always loaded into memory
+2. All writes go directly to the MemTable index
+3. Reads check the MemTable first and then the SSTable indexes
+4. Periodically, the MemTable is flushed to disk as an SSTable
+5. Periodically, on-disk SSTables are "collapsed together"
+http://zouzls.github.io/2016/11/23/LevelDB%E4%B9%8BLSM-Tree/
+http://www.cnblogs.com/fxjwind/archive/2012/08/14/2638371.html
+
+
+
+jiuzhang 9
+MapReduce
+
+word frequency
+多台机器Map Reduce
+Map - 机器1，2 只负责把文章拆分为一个一个的单词
+Reduce - 机器3，4各负责一部分word的合并
+存在的问题 - 谁来负责把文章拆分为一小段一小段? 中间传输整理谁来负责?比如怎么知道把a放在机器3还是机器4?
+
+Map Reduce Steps
+1. Input设定好输入文件 2. Split系统帮我们把文件尽量平分到每个机器 3. Map实现怎么把文章切分成单词 (实现代码) 4. 传输整理 系统帮我们整理 5. Reduce实现怎么把单词统一在一起 (实现代码) 6. Output设定输出文件
+“传输整理”详细操作
+Input - Split - Map:实现怎么把文章切分成单词 - Partition and Sort - Fetch - Merge sort - Reduce:实现怎么把单词统一在一起 - Output
+											(硬盘外排序)	 	  (K路归并)
+Q1 Map 多少台机器? Reduce 多少台机器?
+全由自己决定。一般1000map，1000reduce规模
+
+Q2 机器越多就越好么?
+Advantage: 机器越多，那么每台机器处理的就越少，总处理数据就越快
+Disadvantage: 启动机器的时间相应也变长了
+
+Q3 如果不考虑启动时间，Reduce的机器是越多就一定越快么?
+Key的数目就是reduce的上限
+
+Build inverted index with MapReduce ?
+Anagram - MapReduce
+
+1. Mapper 和 Reducer是同时工作还是Mapper 先工作Reducer再工作? Mapper要结束了后Reducer才能运行
+2. 运行过程中一个Mapper或者Reducer挂了怎么办? 重新分配一台机器做
+3. Reducer一个机器Key数目特别多怎么办? 加一个random后缀，类似Shard Key
+4. Input 和 Output 存放在哪? 存放在GFS里面
+5. Local Disk 上面的Mapper output data有没有必要保存在GFS上面?要是丢了怎么办? 不需要，丢了重做就好
+6. Mapper 和 Reducer 可以放在同一台机器么? 这样设计并不是特别好，Mapper 和Reducer之前都有很多需要预处理的工作。两台机器可以并行的预处理。
+
+https://www.iteye.com/blog/langyu-992916
+
+
+
+jiuzhang 10
+Crawler / Typeahead
+
+inverted index 从 word 指向 doc id list 的索引(index) 同理，Forward Index 指的是从 doc id 指向 word list 的索引
+chinese word segmentation
+viterbi algorithm
+https://www.zhihu.com/question/20136144
+https://blog.csdn.net/sgyuanshi/article/details/105646668
+https://wulc.me/2017/03/02/%E7%BB%B4%E7%89%B9%E6%AF%94%E7%AE%97%E6%B3%95/
+
+爬虫的目的 
+抓取互联网上的“所有”网页内容信息 并存储下来供索引器(Indexer)建立倒排索引(Inverted Index)
+
+存储HTML 还是存储文本内容?
+存HTML, 文本信息在不同的位置权重不同 标题和正文的权重不一样 且还需要保存 <a href=”/course/”> 这样的链接信息
+爬虫的模型
+URL(链接)可以认为是图中的节点 根据URL抓取下来的网页中的其他URL即体现了URL之间的关联性 ，可以看做一条图中的有向边
+PageRank
+被更多其他网页指向的网页，具有更高的价值
+
+从哪些网页开始爬取?
+种子链接 (seed urls) 通常是一些新闻类网站 或者 Alexa 上的 Top 100 sites
+
+爬取目标(面试要求) 10天之内抓取下 1B 网页 (1k webpages per sec) 需要 10T 的存储 (10k per webpage)
+
+Service 服务
+在一个基础版的 Web Crawler 中我们只需要一个 Crawler Service
+
+使用什么算法进行爬取? DFS or BFS ? Most situation use BFSb ecause most valuable info from web pages doesn't have much link depth https://stackoverflow.com/questions/20579169/dfs-vs-bfs-in-web-crawler-design
+生产者消费者模型 在 Web Crawler 中，Crawler 即是 Producer 又是 Consumer
+单进程(single process)爬虫是否可行? single process 会因为network 的原因大部分时间处于idle状态 一般来说平均 download一篇 webpage需要2s 那么single process的性能只能做到 0.5 webpage / s
+是否进程数越多越好? 不行，过多的context switch会导致CPU利用率下降 更好的办法是，我们可以用20台机器，每台机器启动100 个processes，每个process单独执行一个爬虫程序
+
+Storage 存储 
+爬虫爬取到的网页，如何存储? 是存在爬虫所在的机器上还是存储在其他地方? 
+DFS (Distributed File System) 若是直接在爬虫上存储会使得数据管理混乱 且破坏了爬虫 Stateless 的属性
+BFS中的 Queue 如何存储? 是直接在内存中开一个 Queue 么? 直接在内存中存储会导断电时数据丢失 应该使用 Message Queue，如 Redis, Kafka, RabbitMQ
+BFS中的 HashSet 如何存储? 存储在数据库中 可以是效率比较高的key-value 的数据库 除了是否被取过的信息，还可以同时存储其他的一些信息
+
+def crawler_task(url):
+	webpage = http_request.download(url) # download webpage
+	distributed_file_system.save(url, webpage) # store webpage
+
+	for next_url in extract_urls(webpage): 	# extract urls from webpage
+		if not database.exists(next_url): 	# check if have visited url
+			message_queue.add_task('crawler_task', next_url) # add to queue
+			database.insert(next_url) 		# add to hashset
+ 
+Robots协议 爬虫协议
+有很多网站的 robots 协议中会限制爬虫的访问频率 Robots 协议不是一个强制协议，是一个软性约定
+robots protocol
+https://www.jianshu.com/p/d16076661d40
+
+如何限制爬虫访问某个网站的频率? 单纯的使用先进先出的 Queue 会使得一个网站短时间内被抓取次数过多，从而导致爬虫被封等问题
+让Crawler只做 Consumer，不负责产生新的抓取任务 新增一个 Scheduler (Producer) 负责调度和生产抓取任务 在 Database 中记录每个网站下一次可以友好抓取的时间
+防止网站被过度抓取
+DB 中增加 key=domain value=url_list 的存储结构，存放每个域名下面待抓取的 URL List DB 中增加每个 domain 下次什么时候可以被抓取的信息记录
+Scheduler 的代码，循环遍历每个 domain，遇到可以抓取的 domain，就把其中的一个 url 丢到抓取队列中
+Database 中存储的数据
+
+def crawler_task(url):
+	webpage = http_request.download(url) # download webpage
+	distributed_file_system.save(url, webpage) # store webpage
+
+	for next_url in extract_urls(webpage):
+		if not database.url_existed(next_url):
+			domain = fetch_domain(next_url) 	# get domain of the url
+			database.append_url(domain=domain, url=next_url)  # put url into its domain
+
+def scheduler(scheduler_id):
+	while True:
+		for domain in database.filter_domains(key=scheduler_id):
+			if not good_time_to_crawl(domain):
+				continue
+
+			url = database.get_url_from(domain)
+			message_queue.add_task('crawler_task', url)
+			database.update_next_available_crawl_time(domain)
+
+在中国抓取美国的网页会比较慢
+在不同的地区部署 Crawler 系统 每个地区只抓取所在地区被分配的 domain 下的网页 可以通过 domain 的 whois 信息来确定网站所属地区
+ 
+如何处理网页的更新和失效? exponential backoff
+很多时候网页会不断更新，爬虫也需要不断的抓取同一个网页 有的时候可能网站挂了一小段时间，此时网页正好无法被抓取
+ 如何处理网页更新
+• URL 抓取成功以后，默认 1 小时以后重新抓取
+• 如果 1 小时以后抓取到的网页没有变化，则设为 2 小时以后再次抓取
+• 2小时以后还是没有变化，则设为 4 小时以后重新抓取，以此类推
+• 如果 1 小时以后抓取到的网页发生变化了，则设为 30 分钟以后再次抓取
+• 30分钟以后又变化了，设为 15 分钟以后重新抓取。
+• 设置抓取时间的上下边界，如至少 30 天要抓取一次，至多 5 分钟抓取一次
+如何处理网页失效
+• URL 抓取失效以后，默认 1 小时以后重新抓取
+• 如果 1 小时以后依然抓不到，则设置为 2 小时
+• 其他步骤类似网页更新的情况
+ 
+https://michaelnielsen.org/ddi/how-to-crawl-a-quarter-billion-webpages-in-40-hours/
+
+
+Typeahead vs Google Suggestion
+
+---------- final solution:
+用户输入一段想要搜索的内容的前缀，返回可能匹配的 Top 10 Suggest Queries 尽量返回被其他人搜索得较多的 Queries
+
+Service:
+QueryService: 提供 Top 10 Queries 的查询
+CollectionService: 记录用户的 Queries 提供给 QueryService
+
+Storage
+trie vs key-value store (key可以是用户输入的query prefix value是Top 10 Queries)
+
+如何计算 Top 10 Queries
+CollectionService 定期遍历所有 Queries ，将每个 Query 通过打擂台的方式加入到其所有 Prefix 的 Top 10 Queries 中
+如 apple 这个词如果被搜索了 1b 次 那 apple 需要分别被加入到 a, ap, app, appl, apple 这5个 prefix 的 Top 10 Queries 中 如果某个 prefix 已经存在了被搜索次数更多的其他 10 个 Queries，就无需再加入了
+最后相当于我们需要存储下这样一些 key-value:
+• a: [“amazon”, “aws”, “air china”, “apple”, “airbnb”, “adidas”, ...] 	<- this could be a min heap ([(1000, amazone), (1500, aws), ...]) for each word find its all prefix and compare count with heap
+
+Scale
+如何优化 CollectionService
+不记录所有的 Queries，以 1/10000 的概率来记录 即 if get_random(10000) == 0 则对应的 Query 计数+1 否则就直接扔掉 因为我们不关心具体的 Query 次数，只需要一个相对的排名 该是 Top 10 的还是 Top 10
+
+用户输入速度很快怎么办
+没有必要都获取 a, ap, app, appl, apple 的 top 10 queries 在 frontend 设置一个 delay 当用户停止输入超过 200ms 时，才发送请求
+
+Backend Cache
+每次更新 prefix -> top 10 的数据时都主动更新 Backend Cache 避免更新带来的 Cache miss
+Frontend-cache & Prefetch Frontend-cache 即在前端进行缓存
+Pre-fetch 即预加载一些用户可能搜索的 prefix 和 top 10
+
+如何获得实时热门 Queries
+构建一套一样的系统，只是查询的内容是最近 2 小时内的热门搜索 这套系统每 2 小时更新一次数据
+用户的请求需要汇总普通搜索结果和热门搜索结果
+汇总时可以用一些算法来提高热门搜索的权重(2小时内被搜索的次 数肯定会员小于历史被搜索次数)
+网页搜索结果的展示也有类似的架构
+
+----------
+
+
+Typeahead.js 是 Twitter 开源的一个前端插件 支持输入一个前缀后，返回匹配这个前缀的 items
+Google Suggestion 是搜索时提供的 Query 建议 是一个后端的系统
+
+Service 服务 
+QueryService: 提供 Top 10 Queries 的查询
+CollectionService: 记录用户的 Queries 提供给 QueryService
+
+Storage 存储
+QueryService - 什么结构支持前缀查询?
+前缀树 Trie / Prefix Tree
+• 好处: 节省空间
+• 坏处: 没有现成的支持该结构的数据库
+
+哈希表 HashTable / HashMap
+• 好处: 现成的 Key-value Storage 很多，如 RocksDB, Redis
+• 坏处: 空间耗费相对于 Trie 稍大
+
+如果使用 Key-value Storage key 可以是用户输入的 query prefix 那么 value 是什么? Top 10 Queries
+如何计算 Top 10 Queries ? 定期遍历所有 Queries ，将每个 Query 通过打擂台的方式加入到其所有 Prefix 的 Top 10 Queries 中
+
+如何优化 CollectionService 并不是每条 Query 都会成为 Top 10 会浪费很多存储在记录永远不会成为 Top 10 的 Queries 上
+不记录所有的 Queries，以 1/10000 的概率来记录 即 if get_random(10000) == 0 则对应的 Query 计数+1 否则就直接扔掉 因为我们不关心具体的 Query 次数，只需要一个相对的排名 该是 Top 10 的还是 Top 10
+
+优化 Prefix → Top 10 的构建速度 循环遍历每一个 Query 然后打擂台的方式非常慢 假设计算资源足够，有什么办法可以优化效率?
+Map Reduce
+Map: <apple: 1b> → <a: apple,1b> <ap: apple, 1b> ... Reduce: 遍历同一个 Prefix 下的 Queries, 筛选 Top 10
+
+用户输入速度很快怎么办
+在 frontend 设置一个 delay 当用户停止输入超过 200ms 时，才发送请求
+
+如何优化响应速度
+每次更新 prefix -> top 10 的数据时都主动更新 Backend Cache 避免更新带来的 Cache miss
+使用 Frontend-cache / Pre-fetch 的方法避免过多的 round-trip
+
+如何获得实时热门 Queries 每天重新计算一次 Prefix → Top 10 则可能会有一些延迟 且一些短期内的热门的搜索应该获得更高的权重
+构建一套一样的系统，只是查询的内容是最近2小时内的热门搜索 这套系统每2小时更新一次数据 用户的请求需要汇总普通搜索结果和热门搜索结果 汇总时可以用一些算法来提高热门搜索的权重(2小时内被搜索的次 数肯定会员小于历史被搜索次数)
+网页搜索结果的展示也有类似的架构
+
+ 
+
+
+ 
+
+
+
+PageRank
+
+
+
+
+
+
+
+
+
+Ticket booking
+
+NOTE
+the diagram is not 100% correct !! when user book a reservation the transaction happens when he click 'go to payment' button to mark show_seat status to 'reserved'. Once reserved
+during the payment time (say 5 mins) other users cannot book these seats (since their status is 'reserved' not 'available').
+then user can make payment and update booking table 
+
+workflow:
+1. The user searches for a movie.
+2. The user selects a movie.
+3. The user is shown the available shows of the movie.
+4. The user selects a show.
+5. The user selects the number of seats to be reserved.
+6. If the required number of seats are available, the user is shown a map of the theater to select seats. If not, the user is taken to ‘step 8’ below.
+7. Once the user selects the seat, the system will try to reserve those selected seats.
+8. If seats can’t be reserved: 
+	1. The seats the user wants to reserve are no longer available. Show error msg and user can re-select available seats
+	2. not enough seats for user selection go back to step 5
+9. If seats are reserved successfully, the user has five minutes to pay for the reservation. After payment, the booking is marked complete. If the user is not able to pay within five minutes
+	all their reserved seats are freed to become available to other users.
+
+
+table schema
+lots of table for this system
+
+Movie / Show / Booking / User
+Cinema / Cinema_Hall / Show_Seat /Payment
+City / Cinema_Seat
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+爱思问答，爱思的答疑平台
+https://forum.acecodeinterview.com/
+
+
+kafka
+distributed event streaming platform
+topic stores a sequence of events. It can have multiple partition. partition will be persisted in disk
+For Kafka ordering is guaranteed within a partition, but not between partitions. If messages must remain ordered for an entire topic, then use only one partition for that topic.
+event have a retention period
+consumer group
+https://dattell.com/data-architecture-blog/kafka-uses-consumer-groups-for-scaling-event-streaming/
+kafka has consumer offset to store where the consumer left last time processing the events
+kafka architecture
+https://www.tutorialspoint.com/apache_kafka/apache_kafka_fundamentals.htm
+kafka uses zookeeper internally for coordination
+
+kafka delivery guanrantee exactly once / at most once / at least once / no guarantee
+
+kafka topics partitions offset
+https://medium.com/event-driven-utopia/understanding-kafka-topic-partitions-ae40f80552e8
+https://sookocheff.com/post/kafka/kafka-in-a-nutshell/
+
+rabbitmq
+1
+producer -> exchange -> routing_key -> queue -> consumer
+producing: channel.basic_publish(exchange='', routing_key='hello', body='Hello World!')
+receiving: channel.basic_consume(queue='hello', auto_ack=True, on_message_callback=callback)
+2 work queue
+https://www.rabbitmq.com/tutorials/tutorial-two-python.html
+auto_ack=True
+durable=True
+fair dispatch - prefetch_count = 1
+3 publish subscribe
+https://www.rabbitmq.com/tutorials/tutorial-three-python.html
+An exchange is a very simple thing. On one side it receives messages from producers and the other side it pushes them to queues. The exchange must know exactly what to do with a message it receives.
+channel.exchange_declare(exchange='logs', exchange_type='fanout')
+bindings: exchange -> certain queues
+4 routing
+5 topic
+
+
+kafka vs rabbitmq
+https://www.cloudamqp.com/blog/when-to-use-rabbitmq-or-apache-kafka.html
+1. message handling (kafka message replay vs rabbitmq ack and remove)
+2. protocol
+3. routing (kafka does not support routing you have to make use of consumer groups vs rabbitmq has direct/topic/fanout/header exchange)
+4. message priority (kafka does not have vs rabbitmq has)
+5. acknowledgement (kafka offset vs rabbitmq ack)
+6. log compaction (kafka has rabbitmq does not)
+use cases for rabbitmq
+1. long running tasks
+2. middleman in microservice architecture
+use cases for kafka
+stor, read, analyze streaming data
+real time processing 
+
+
+zookeeper
+distributed coordination service
+client-server architecture (leader with multiple followers)
+read from any servers
+write always with leader and only majority of followers successful the write will be successful
+zookeeper data model - znode like linux file system
+
+
+
+cassandra
+architecture
+https://www.baeldung.com/cassandra-keys
+https://www.youtube.com/watch?v=jgqu1BcSKUI&t=1s
+https://www.youtube.com/watch?v=y4Gt_LQ8sdA
+consistent hashing
+partition
+replication
+last write win
+repair data anti entropy
+quorum
+gossip
+log structure storage append only (data is immutable)
+compaction
+
+
+
+
+
+system design interview
+https://github.com/donnemartin/system-design-primer/blob/master/README-zh-Hans.md
+
+network partition
+
+checksum
+small sized block of data derived from another block of digital data for the purpose of detecting errors that have beeen introduced during transmission or storage. verify data integrity
+data -> cryptographic hash function (MD5 SHA-1 SHA-256) -> checksum
+https://www.lifewire.com/what-does-checksum-mean-2625825
+
+
+distributed cache
+https://zhuanlan.zhihu.com/p/110595954
+https://zhuanlan.zhihu.com/p/55303228
+local cache vs distributed cache
+https://zhuanlan.zhihu.com/p/383841110
+hot key issue
+https://www.alibabacloud.com/help/zh/doc-detail/67252.htm
+https://developer.aliyun.com/article/51181
+https://zhuanlan.zhihu.com/p/149855281
+https://www.jianshu.com/p/d5a3668d4dad
+
+redis
+https://dbaplus.cn/news-141-1988-1.html
+
+consistent hash
+https://www.educative.io/courses/grokking-the-system-design-interview/B81vnyp0GpY
+implement consistent hash - https://blog.csdn.net/jmspan/article/details/51749521
+https://blog.csdn.net/sparkliang/article/details/5279393
+https://segmentfault.com/a/1190000021199728
+https://aijishu.com/a/1060000000007241
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483866&idx=1&sn=45d882b6791de2bd0d13916a52f9d4ec&chksm=ea53cce6dd2445f0c50d22ced3d48f4de590da81763969878a7adf0d1cae095efc8d3386e15e&scene=21#wechat_redirect
+
+秒杀系统
+1. 消息队列削峰写流量
+2. 异步化简化秒杀业务
+3. 解耦
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483802&idx=1&sn=c3a51aef3d0b82627a81d135ba2e1208&chksm=ea53cca6dd2445b05ff3398743d3854aa0c097214d44aafe951e7550822eb56b10bf714002ce&scene=21#wechat_redirect
+
+MQ
+kafka vs rabbitmq vs rocketmq
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483760&idx=1&sn=0e704a457d8d0dcf5ee203e0fc61b4d4&chksm=ea53cc4cdd24455aba06751ad35b7c48a709670f015a14d2d29221c379c955c0ec136e968b89&scene=21#wechat_redirect
+
+consensus
+raft
+http://thesecretlivesofdata.com/raft/
+https://www.freecodecamp.org/news/in-search-of-an-understandable-consensus-algorithm-a-summary-4bc294c97e0d/
+https://www.educative.io/answers/how-does-the-leader-election-in-raft-work
+
+分布式选主
+Bully / Raft / ZAB
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483661&idx=1&sn=59a6f5b31b3b38e6e8080682f6f323d0&chksm=ea53cc31dd2445273b8dcb032a699ad90faf9b2562f8c4711ec38a82b879a7d8346edea07378&scene=21#wechat_redirect
+raft consensus algorithm
+https://raft.github.io/
+raft vs paxos
+
+分布式事务 二阶段提交以及三阶段提交
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483683&idx=1&sn=fdb08794f96fb1f8a91671d968251a25&chksm=ea53cc1fdd244509626be7520bfc5701ddbd4c45e8beddcfc1f2bc943740ea91a78111a7abb0&scene=21#wechat_redirect
+分布式消息的最终一致性方案
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483687&idx=1&sn=8b7085a26b039daeb10976a47c443e0d&chksm=ea53cc1bdd24450d3e0169e41e3a18332b9058e2ffd6abb14ff99832b87042e6e5f3c3d95cff&scene=21#wechat_redirect
+
+分布式锁
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483692&idx=1&sn=fd8995ba9d8b5157bf1deca0ac92d2e5&chksm=ea53cc10dd24450672a4d172a2c36a6d634881cdb08fece10ae6d88a87046c3ab5452a239305&scene=21#wechat_redirect
+Zookeeper实现分布式锁
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483735&idx=1&sn=a1dd0a10bcf6a3eb6e0abc2f294f1e13&chksm=ea53cc6bdd24457d392b3744b9b24d3b0efe8043ae91403d745daec7e1adfb3066ab9f2f2386&scene=21#wechat_redirect
+
+数据库读写分离方案，实现高性能数据库集群
+binary log
+https://dev.mysql.com/doc/refman/8.0/en/binary-log.html
+relay log
+https://dev.mysql.com/doc/refman/5.7/en/replica-logs-relaylog.html
+主从延时 - middleware or cache
+https://segmentfault.com/a/1190000038420324
+主从分离 code怎么实现
+1. ShardingSphere - JDBC
+https://www.cnblogs.com/cjsblog/p/13154158.html
+2. MySql router / proxy
+https://blog.csdn.net/wzy0623/article/details/81103469
+https://www.cnblogs.com/f-ck-need-u/p/9276639.html
+https://www.cnblogs.com/xiaoyuxixi/p/12075353.html
+3. Heimdall data
+https://www.heimdalldata.com/aws/?utm_source=aws&utm_medium=blog&utm_campaign=RDS-DMS&utm_term=Amazon%20RDS
+https://aws.amazon.com/blogs/apn/using-the-heimdall-proxy-to-split-reads-and-writes-for-amazon-aurora-and-amazon-rds/
+
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483703&idx=1&sn=3217136ac83298b13b625e0645516156&chksm=ea53cc0bdd24451d204141f252d5a6530c6d04beae383c1a30f49c5628f8e68016c9d9bc1e7f&scene=21#wechat_redirect
+https://developpaper.com/its-not-easy-to-design-database-cluster-with-read-write-separation/
+
+数据库分库分表
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483721&idx=1&sn=0a9133c8be5ef17a49f55bc1c0005e1a&chksm=ea53cc75dd244563bcaa91fa6e72995bf7995d3fc435ec4f25a5986d68eca8f5d59a6d71146c&scene=21#wechat_redirect
+
+数据库分库分表，手把手教你怎么去动态扩容索容
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483752&idx=1&sn=1677c195be0fbc8e8f4eb13c5747f260&chksm=ea53cc54dd2445425adb89a840d4f72d17ab8a889af8250d760c7d3a7d46025ead68cf24d21f&scene=21#wechat_redirect
+
+数据库分库分表后，我们怎么保证ID全局唯一
+1. 数据库自增主键
+2. UUID
+3. Redis生成ID
+4. snowflake ID
+https://www.jianshu.com/p/5a71cd4e2de5
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483729&idx=1&sn=3a9329a562c7daf3b36ef2fa987def48&chksm=ea53cc6ddd24457b764bd3fb91b44976a3c13c0e5a895f4e73879752a27741d6ca2772f46139&scene=21#wechat_redirect
+https://www.jianshu.com/p/5a71cd4e2de5
+https://www.jianshu.com/p/c5d8f150c8b6
+
+数据库分库分表后，我们生产环境怎么实现不停机数据迁移
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483744&idx=1&sn=9308cdf75280c901af29aab0029e557b&chksm=ea53cc5cdd24454a15ed3f8ef3c53bdf311d5c8c899c31670999cd4a41081dd6267cd24088e1&scene=21#wechat_redirect
+
+nosql
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483756&idx=1&sn=c165a1defa66f7c481d2a0734d49d184&chksm=ea53cc50dd24454655a77bc4df71e0134c832cb5b30fb1a5033de3ac649fec9b3476783d046f&scene=21#wechat_redirect
+
+cache aside
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483764&idx=1&sn=bd56c0af21e5c0ea0f712c9acc130f27&chksm=ea53cc48dd24455ea6a4f9b1825361f591c63cc71998fddaf34f07c743390c1f5b090d662254&scene=21#wechat_redirect
+
+你们系统是怎么保证高并发的
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483667&idx=1&sn=27b74ae2012928648328f98720565061&chksm=ea53cc2fdd2445394d1c71920f380c0a8d503ea65e15f4d2809fcc129a4af03abceb147a21cf&scene=21#wechat_redirect
+
+你们系统是怎么保证高可用的
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483672&idx=1&sn=a815173cf23e0d93fab9a2762799cccd&chksm=ea53cc24dd244532927307cbdf3f9917361fbd9c249200855c67f9c99dc1e9a8d27e6a44085f&scene=21#wechat_redirect
+https://zhuanlan.zhihu.com/p/145169799
+
+你们系统是怎么保证可扩展的
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483677&idx=1&sn=a022bef00fcdca3c4468813046080b10&chksm=ea53cc21dd244537edc268c6e959c6eac83d6dfac785d1b201f70ef84092e6f849b07c3f5d3d&scene=21#wechat_redirect
+
+Elasticsearch分布式架构原理
+https://mp.weixin.qq.com/s?__biz=MzI2MTk1NDY0Mw==&mid=2247483656&idx=1&sn=9d70dce7f3a32f5a7bc99ebc4c9c2b8f&chksm=ea53cc34dd24452249ba87d01ae1ca8d245f1bac8c32624e282732530549c1a2f8a18668352e&scene=21#wechat_redirect
+
+
+data partition
+vertical / horizontal partition / directory based partition
+common problem:
+joins and denormalization
+referential integrity
+rebalancing
+
+
+load balance
+algorithm:
+round robin
+weighted round robin
+least connection
+least response time
+least bandwidth
+IP hash
+
+Reduntant load balance
+
+
+Ajax poll vs Http long poll vs websocket vs SSE
+Ajax poll
+1. client keeps sending request 
+2. server response with empty response or content response
+
+Long poll
+1. client send request and keep connection open
+2. server wait until there's response and send it back
+3. or the connection gets timeout in which case client open connection again
+4. once client gets response it send request again
+
+websocket
+1. full duplex communication between client and server over a simple TCP connection
+2. both side can send content at any time
+
+SSE
+
+
+
+
+proxy
+open proxy
+reverse proxy
+nginx + keepalived (corosync, heartbeat, pacemaker, haproxy, lvs)
+https://segmentfault.com/a/1190000002881132
+https://blog.51cto.com/javastack/3308950
+
+
+
+
+
+
+
+
+
+
+
+
+high availability
+
+
+
+
+
+
+
+
+
+
+
+
+
+- Facebook
+total users: 3 billions active users: 1.3 billion
+- Instagram
+1 billion monthly active users
+- Twitter
+total users: 3 billions active users: 330 million
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Design Instagram (read heavy)
+object storage
+https://en.wikipedia.org/wiki/Object_storage
+
+Cassandra (need to review it)
+
+webserver can have a max 500 connections at any time and it cannot have more than 500 concurrent uploads or reads
+split read / write into separate services
+
+primary secondary copy
+failover - automatically or manually ?
+
+dedicate a separate database instance to generate auto increment IDs
+
+plan for future growth of our system
+a large number of logical partitions reside on a single physical database server at beginning. Later migrate some partitions to another server. Maintain a config file
+
+pre-generate news feed
+first query the UserNewsFeed table to find the last time the News Feed was generated for that user. Then, new News-Feed data will be generated from that time onwards
+
+CDN
+
+
+
+Design Twitter Search
+Sharding based on Words
+Sharding based on the tweet object
+
+
+
+Design Twitter (read heavy)
+Capacity Estimation and Constraints
+
+Data Sharding
+Sharding based on UserID
+1. What if a user becomes hot? There could be a lot of queries on the server holding the user
+2. Over time some users can end up storing a lot of tweets or having a lot of follows compared to others
+
+How can we create globally unique tweet ID ?
+
+Sharding based on TweetID
+This approach solves the problem of hot users, but, in contrast to sharding by UserID, we have to query all database partitions to find tweets of a user, which can result in higher latencies.
+
+Sharding based on Tweet creation time
+The problem here is that the traffic load will not be distributed, e.g., while writing, all new tweets will be going to one server and the remaining servers will be sitting idle
+
+Shard by Tweet ID and Tweet creation time
+31 bits for epoch seconds + 17 bits auto increment sequence - snowflake idea
+2 databases generating auto incrementing keys, one for even number keys and other odd number keys
+
+Cache
+Our cache would be like a hash table where ‘key’ would be ‘OwnerID’ and ‘value’ would be a doubly linked list containing all the tweets from that user in the past three days
+
+
+
+Design Facebook News Feed
+How to generate new NewsFeed (mostly for pull model)
+Offline generation for newsfeed - dedicated servers that are continuously generating user's newsfeed and store them in memory. So, whenever a user requests for the new posts for their feed, we can simply
+serve it from the pre-generated, stored location
+Whenever these servers need to generate the feed for a user, they will first query to see what was the last time the feed was generated for that user. Then, new feed data would be generated from that time onwards. We can store this data in a hash table where the “key” would be UserID and “value” would be a STRUCT like this:
+Struct {
+    LinkedHashMap<FeedItemID, FeedItem> feedItems;
+    DateTime lastGenerated;
+}
+
+How many feed items should we store in memory for a user’s feed? 
+based on the usage pattern
+
+Should we generate (and keep in memory) newsfeeds for all users?
+1) a more straightforward approach could be, to use an LRU based cache that can remove users from memory that haven’t accessed their newsfeed for a long time 2) a smarter solution can figure out the login pattern of users to pre-generate their newsfeed, e.g., at what time of the day a user is active and which days of the week does a user access their newsfeed? etc.
+
+Feed Publishing
+push: fanout-on-write 	pull: fanout-on-load
+
+Sharding posts and metadata: similar to Design Twitter
+Sharding feed data
+For feed data, which is being stored in memory, we can partition it based on UserID. Also, for any given user, since we don’t expect to store more than 500 FeedItemIDs, we will not
+run into a scenario where feed data for a user doesn’t fit on a single server. To get the feed of a user, we would always have to query only one server.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Design Yelp or Nearby friends (read / search heavy)
+proximity server
+
+Given that the location of a place doesn’t change that often, we don’t need to worry about frequent updates of the data. As a contrast, if we intend to build a service where objects do change their location frequently, e.g., people or taxis, then we might come up with a very different design.
+
+Grids
+dynamic size grids
+data structure: quadtree
+
+sharding based on LocationID
+
+mapping btw places and QuadTree server
+
+most popular places within a given radius
+
+
+
+Design Uber
+a lot more updates happening to our tree than querying for nearby drivers
+keep latest position reported by all drivers in a hash table and update our QuadTree a little less frequently
+DriverLocationHT
+Notification service
+when a customer opens Uber app they query server to find nearby drivers. On the server side, before return list of drivers to the customer, we will subscribe the customer for all the updates from those drivers. whenever we have an update in DriverLocationHT for that driver we broadcast the current location of the driver to all subscribed customers
+
+How will the new publishers/drivers get added for a current customer ?
+
+do we need to repartition a grid as soon as it reaches the maximum limit ?
+
+
+
+
+
+
+
+
+
+
+
+Design Youtube / Netflix (read heavy)
+offset
+codec
+
+where would thumbnails be stored ?
+BigTable or cache
+
+video encoding
+
+video deduplication 
+block matching algorithm
+https://en.wikipedia.org/wiki/Block-matching_algorithm
+phase correlation
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Design Dropbox / Google drive
+exponentially backoff
+ACID
+messaging middleware
+https://en.wikipedia.org/wiki/Message_queue
+block storage
+https://cloudacademy.com/blog/object-storage-block-storage/
+data deduplication
+hash-based partitioning - consistent hashing
+
+
+
+
+
+
+
+
+
+
+
+
+
+Design URL shorten
+Functional Requirements:
+3. Users should optionally be able to pick a custom short link for their URL.
+4. Links will expire after a standard default timespan. Users should be able to specify the expiration time.
+How do we detect and prevent abuse? A malicious user can put us out of business by consuming all URL keys in the current design. To prevent abuse, we can limit users via their api_dev_key. Each api_dev_key can be limited to a certain number of URL creations and redirections per some time period (which may be set to a different duration per developer key).
+
+b. Generating keys offline
+We can have a standalone Key Generation Service (KGS) that generates random six-letter strings beforehand and stores them in a database (let’s call it key-DB). Whenever we want to shorten a URL, we will take one of the already-generated keys and use it. This approach will make things quite simple and fast. Not only are we not encoding the URL, but we won’t have to worry about duplications or collisions. KGS will make sure all the keys inserted into key-DB are unique
+
+10. Purging or DB cleanup
+• Whenever a user tries to access an expired link, we can delete the link and return an error to the user.
+• A separate Cleanup service can run periodically to remove expired links from our storage and cache. This service should be very lightweight and can be scheduled to run only when the user traffic is expected to be low.
+• We can have a default expiration time for each link (e.g., two years).
+• After removing an expired link, we can put the key back in the key-DB to be reused.
+• Should we remove links that haven’t been visited in some length of time, say six months? This could be tricky. Since storage is getting cheap, we can decide to keep links forever.
+
+12. Security and Permissions
+Can users create private URLs or allow a particular set of users to access a URL?
+We can store the permission level (public/private) with each URL in the database. We can also create a separate table to store UserIDs that have permission to see a specific URL. If a user does not have permission and tries to access a URL, we can send an error (HTTP 401) back. Given that we are storing our data in a NoSQL wide-column database like Cassandra, the key for the table storing permissions would be the ‘Hash’ (or the KGS generated ‘key’). The columns will store the UserIDs of those users that have permission to see the URL.
+
+
+
+
+
+Design Pastebin (read heavy)
+KGS: genreate random six letters strings beforehand and stores them in a database
+Pretty similar to URL shorten service
+
+
+
+
+
+
+
+
+
+
+
+
+
+Design Ticketmaster
+ActiveReservationService
+LinkedHashMap
+https://docs.oracle.com/javase/7/docs/api/java/util/LinkedHashMap.html
+
+WaitingUsersService
+long polling
+https://en.wikipedia.org/wiki/Push_technology#Long_polling
+
+Concurrency / transaction isolation level / dirty read / nonrepeatable read / phantom read
+https://docs.microsoft.com/en-us/sql/odbc/reference/develop-app/transaction-isolation-levels?view=sql-server-ver15
+https://en.wikipedia.org/wiki/Isolation_(database_systems)#Dirty_reads
+https://en.wikipedia.org/wiki/Isolation_(database_systems)#Non-repeatable_reads
+https://en.wikipedia.org/wiki/Isolation_(database_systems)#Phantom_reads
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
