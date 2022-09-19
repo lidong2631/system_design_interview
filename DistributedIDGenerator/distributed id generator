@@ -1,0 +1,12 @@
+api design
+rpc interface: get_uid_batch(batch_size: int) -> List[int64]
+
+https://towardsdatascience.com/ace-the-system-design-interview-distributed-id-generator-c65c6b568027
+
+
+《IM消息ID技术专题(一)：微信的海量IM聊天消息序列号生成实践（算法原理篇）》
+《IM消息ID技术专题(二)：微信的海量IM聊天消息序列号生成实践（容灾方案篇）》
+《IM消息ID技术专题(三)：解密融云IM产品的聊天消息ID生成策略》
+《IM消息ID技术专题(四)：深度解密美团的分布式ID生成算法》
+《IM消息ID技术专题(五)：开源分布式ID生成器UidGenerator的技术实现》
+《IM消息ID技术专题(六)：深度解密滴滴的高性能ID生成器(Tinyid)》

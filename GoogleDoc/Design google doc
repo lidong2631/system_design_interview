@@ -22,3 +22,12 @@ One of the biggest challenges is real-time conflict resolution. Common algorithm
 
 Google Doc uses OT according to its Wikipedia page and CRDT is an active area of research for real-time concurrent editing.
 
+
+
+
+
+1) Distributed file system
+2) Web socket
+3) Collaboration subsystem
+4) Operational Transform
+5) CRDT

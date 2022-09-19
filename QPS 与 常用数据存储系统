@@ -1,0 +1,6 @@
+QPS 与 常用数据存储系统
+sql 1k
+nosql 10k
+Redis / Memcached 100k ~ 1m
+
+https://xinjiema.gitbooks.io/system-design/content/database-and-consistent-hashing.html

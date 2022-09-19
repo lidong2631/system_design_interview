@@ -1,0 +1,26 @@
+订单系统中并发问题和锁机制的探讨
+
+方案4：
+
+既然又回到了在数据库上加锁，我们又想一下如果我们在查询时，使用乐观锁，但在预订之前使用悲观锁会怎样呢？例如我们查询时：
+
+select * from table where ……
+
+用户A、用户B都查询到了相同的票信息（中铺和下铺），用户A或用户B在预订时做一次悲观锁：
+
+select * from table where …… for update（只对预订的票做悲观锁）
+
+此时后者在预订时，无法获取该记录的锁，自然就无法预订，避免了重复预订的问题。
+
+https://cloud.tencent.com/developer/article/1156057
+
+mysql SELECT ... FOR UPDATE
+https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html
+mysql LOCK TABLE
+https://dev.mysql.com/doc/refman/8.0/en/lock-tables.html
+innoDB vs MyISAM
+
+
+订票系统 给座位 上锁的话 如果要用数据库的transactions 应该用哪个level?
+作为上锁的操作即使在极端情况下有多个用户同时做了也不会造成太大的问题，所以我倾向于不用太高的isolation level. Read Committed 就可以了。
+https://forum.acecodeinterview.com/t/topic/303

@@ -1,0 +1,10 @@
+Design Like Count (Youtube views)
+
+
+https://medium.com/@morefree7/design-a-system-that-tracks-the-number-of-likes-ea69fdb41cf2
+
+比较强调实时性的话，可以用 Distributed Cache，把每个 Post 对应到一个 Like count 上，然后使用 Optimistic Locking 18 来加减这个 counter。
+一些相关的做法：
+Event Driven Systems: Building A Facebook Like Counter & Notification System 29
+Design a system that tracks the number of “likes” 
+https://forum.acecodeinterview.com/t/topic/87

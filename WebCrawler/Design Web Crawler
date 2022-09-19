@@ -1,4 +1,79 @@
-Design Web Crawler (jiuzhang)
+Design web crawler
+
+给定了api，
+可以发送任务，任务内容是几个网址 eg a.com, b.cn，要求把上的所有图的地址找到，同时也包括该网址指向的其他网址上的图，以此递归
+可以询问任务状态，告诉你比如说 1个任务完成了 一个任务还在做
+可以查询任务的结果 {a.com: [http://xx.img1.png,http://yy.img2.png], b.c‍‌‌‍‌‍‍‌‍‌‍‍n: [http://cc.img3.jpg}
+
+假设已经有一个工具， 给定一个网页，可以返回来网页里所有图片的地址和网页里的连接，这些连接也需要递归的处理
+/ \
+ |
+如果是上面这个题可以按job scheduler来答
+
+区别可能是对于每一个task url 还需要存domain 这样才能知道这个url爬下来的image属于哪个domain
+job id 	|  domain  |  url  |  next trigger time  |  status  |  enqueued_time  |  enqueued_timeout  |  other status and their timeout  |  interval (for recursive job)  |  priority (optional prioritizer can compute that)
+
+
+
+
+
+
+
+								DNS Resolver 					  Content Storage (web page storage. could use s3 or hdfs to store html)
+		(task url queue: kafka)		| 			(optional)				|
+seed URLs -> URL frontier -> HTML downloader -> Content Parser -> Content seen (hashing of the html code string and check if we have seen. Redis)
+					|		(multi threaded crawler)					|
+					|	(Robots.txt see which page can be crawled)	Link Extractor (can be extended for other module like Image Extractor, web monitor)
+					|											  		|
+					|											    URL Filter (optional)
+					|											  		|
+					| 												URL seen (hashtable / bloomfilter. Redis)
+					|											  		|
+				scheduler <---------------------------------------- URL Storage (nosql db refer to above jiuzhang design for table schema and psuedo codes)
+				    /\   1. regularly check each domain and find one that can be crawled 
+					| 	 2. check updated_at for each url and find one that can be crawled 
+					| 	 3. send it to task queue
+			web request (urls need to be crawl) send to scheduler
+
+workflow:
+1: Add seed URLs to the URL Frontier
+
+2: HTML Downloader fetches a list of URLs from URL Frontier.
+
+3: HTML Downloader gets IP addresses of URLs from DNS resolver and starts downloading.
+
+4: Content Parser parses HTML pages and checks if pages are malformed.
+
+5: After content is parsed and validated, it is passed to the “Content Seen?” component. 
+
+Step 6: “Content Seen” component checks if a HTML page is already in the storage.
+	• If it is in the storage, this means the same content in a different URL has already been processed. In this case, the HTML page is discarded.
+	• If it is not in the storage, the system has not processed the same content before. The content is passed to Link Extractor.
+
+7: Link extractor extracts links from HTML pages.
+
+8: Extracted links are passed to the URL filter.
+
+9: After links are filtered, they are passed to the “URL Seen?” component.
+
+10: “URL Seen” component checks if a URL is already in the storage, if yes, it is processed before, and nothing needs to be done.
+
+11: If a URL has not been processed before, it is added to the URL Frontier.
+
+
+DB
+DomainToUrlList 						DomainInfo 										UrlInfo
+key = domain 							key = domain 									key = URL
+value = [url1, url2 ...] 				value = <next_good_time, rate, ...> 			value = {doc_id, status, domain, created_At, updated_At }
+
+
+
+
+
+web crawler跟job scheduler很像啊 ！！
+
+
+
 ---------- final solution:
 
 ask question: 
@@ -59,8 +134,17 @@ def scheduler(scheduler_id):
 在不同的地区部署 Crawler 系统 每个地区只抓取所在地区被分配的 domain 下的网页 可以通过 domain 的 whois 信息来确定网站所属地区
 
 如何处理网页的更新和失效? 增加对每个 URL 的信息记录 记录下这个 URL 下一次需要被重新抓取的时间 可以通过 Expenential Backoff 的方式计算
-
-
+如何处理网页更新
+• URL 抓取成功以后，默认 1 小时以后重新抓取
+• 如果 1 小时以后抓取到的网页没有变化，则设为 2 小时以后再次抓取
+• 2小时以后还是没有变化，则设为 4 小时以后重新抓取，以此类推
+• 如果 1 小时以后抓取到的网页发生变化了，则设为 30 分钟以后再次抓取
+• 30分钟以后又变化了，设为 15 分钟以后重新抓取。
+• 设置抓取时间的上下边界，如至少 30 天要抓取一次，至多 5 分钟抓取一次
+如何处理网页失效
+• URL 抓取失效以后，默认 1 小时以后重新抓取
+• 如果 1 小时以后依然抓不到，则设置为 2 小时
+• 其他步骤类似网页更新的情况
 
 
 
@@ -96,18 +180,33 @@ Interviewer: Pages with duplicate content should be ignored.
 
 
 
-high level design
-								DNS Resolver 					  Content Storage
-									| 									|
-seed URLs -> URL frontier -> HTML downloader -> Content Parser -> Content seen
-					|													|
-					|											  Link Extractor
+high level design (I twisted a little with adding some parts from jiuzhang design)
+FRESHNESS
+• Recrawl based on web pages’ update history.
+• Prioritize URLs and recrawl important pages first and more frequently.
+
+Robustness
+• Save crawl states and data: To guard against failures, crawl states and data are written to a storage system. A disrupted crawl can be restarted easily by loading saved states and data.
+• short time out
+
+Scale:
+Distribute crawl servers geographically. When crawl servers are closer to website hosts, crawlers experience faster download time. Design locality applies to most of the system components: crawl servers, cache, queue, storage
+
+								DNS Resolver 					  Content Storage (web page storage. could use s3 or hdfs to store html)
+		(task url queue: kafka)		| 			(optional)				|
+seed URLs -> URL frontier -> HTML downloader -> Content Parser -> Content seen (hashing of the html code string and check if we have seen. Redis)
+					|		(multi threaded crawler)					|
+					|	(Robots.txt see which page can be crawled)	Link Extractor (can be extended for other module like Image Extractor, web monitor)
 					|											  		|
-					|											  URL Filter
+					|											    URL Filter (optional)
 					|											  		|
-					 ----------------------------------------		URL seen
-																  		|
-																  URL Storage
+					| 												URL seen (hashtable / bloomfilter. Redis)
+					|											  		|
+				scheduler <---------------------------------------- URL Storage (nosql db refer to above jiuzhang design for table schema and psuedo codes)
+				    /\   1. regularly check each domain and find one that can be crawled 
+					| 	 2. check updated_at for each url and find one that can be crawled 
+					| 	 3. send it to task queue
+			web request (urls need to be crawl) send to scheduler
 
 Seed URLs: popular local websites or based on topics (shopping / sports / healthcare)
 
@@ -127,10 +226,25 @@ URL filter
 URL Seen: hashtable / bloomfilter
 URL storage
 
+workflow:
+Step 1: Add seed URLs to the URL Frontier
+Step 2: HTML Downloader fetches a list of URLs from URL Frontier.
+Step 3: HTML Downloader gets IP addresses of URLs from DNS resolver and starts downloading.
+Step 4: Content Parser parses HTML pages and checks if pages are malformed.
+Step 5: After content is parsed and validated, it is passed to the “Content Seen?” component. Step 6: “Content Seen” component checks if a HTML page is already in the storage.
+• If it is in the storage, this means the same content in a different URL has already been processed. In this case, the HTML page is discarded.
+• If it is not in the storage, the system has not processed the same content before. The content is passed to Link Extractor.
+Step 7: Link extractor extracts links from HTML pages.
+Step 8: Extracted links are passed to the URL filter.
+Step 9: After links are filtered, they are passed to the “URL Seen?” component.
+Step 10: “URL Seen” component checks if a URL is already in the storage, if yes, it is processed before, and nothing needs to be done.
+Step 11: If a URL has not been processed before, it is added to the URL Frontier.
+
+
 
 
 deep dive
-BFS over DFS since the depth of DFS can be very deep
+BFS over DFS since the depth of DFS can be very deep. Also useful information usually will 
 
 BFS issue:
 1. Most links from the same web page are linked back to the same host, Wikipedia servers will be flooded with requests
@@ -138,7 +252,8 @@ BFS issue:
 
 URL frontier (refer to schedule servers from jiuzhang)
 
-POLITENESS
+POLITENESS (??? I think jiuzhang design makes more sense. If we have a lot of hosts each of them has its own queue we might have millions queues is that applicable ?)
+The general idea of enforcing politeness is to download one page at a time from the same host. A delay can be added between two download tasks. 
 The politeness constraint is implemented by maintain a mapping from website hostnames to download (worker) threads.
 
 • Queue router: It ensures that each queue (b1, b2, ... bn) only contains URLs from the same host.
@@ -172,6 +287,7 @@ for enqueue/dequeue operations. Data in the buffer is periodically written to th
 HTML Downloader
 
 Robots.txt - specifies what pages crawlers are allowed to download.
+To avoid repeat downloads of robots.txt file, we cache the results of the file. The file is downloaded and saved to cache periodically
 
 Performance optimization
 1. Distributed crawl

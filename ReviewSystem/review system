@@ -1,0 +1,19 @@
+https://www.youtube.com/watch?v=nPDbAZQwrek
+
+create table book_review (
+	dash_id 			long,
+	user_id 			int
+	title 				text
+	review_text 		text
+	published_date 		date,
+	submitted_date		date,
+	status 				int,
+	lang	 			text
+)
+
+create index book_review_idx on book_review(dash_id)
+
+query: select * from book_review where dash_id = ?
+
+one -> multiple
+

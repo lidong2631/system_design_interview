@@ -1,6 +1,122 @@
-Design job scheduler
+Design job scheduler (airflow)
+
+question to ask ?
+1. support recursive job ? which type ? (interval or hard-coded for a specific time)
+2. do we need to reserve execution history
+3. support priority task ? 
+
+assumption:
+1. at least once delivery
+2. no concurrent same job running
+
+
+API
+submit_job(user_id, schedule, code_location)
+retrieve_all_jobs(user_id)
+delete_job(user_id, job_id)
+get_exec_history(job_id)
+
+
+flow:
+1. client send req to schedule a job
+
+2. DB stores job in "job schedule" table. status "new"
+
+3. scheduler polls jobs on a config interval and push to queue. status "enqueued". 
+	select job_id from schedule where next_trigger_time <= time.now() order by next_trigger_time 
+	every 2s.
+	(master workers: master polls and distribute work among workers. worker push jobs into queue and send heartbeat to master. there is a standby master in case of current master is down)
+
+4. if prority job is needed, there will be a prioritizer that compute/get priority of each job and assign to different priority queue
+	there will be a selector choose job from all queues with bias toward higher priority
+	selector will send selected job into queue router where it will be separated based on job type / callback logic type / partition
+
+5. on the receiver side there will be a set of worker machine consume the message
+	the queue could be have multiple partitions (imagine one topic and it will have many partitions and each worker pull from one partition)
+	1. each worker will have a controller process 
+		1. pulls in a background thread 
+		2. claim job to heartbeat controller. heartbeat controller update status "claimed"
+		3. push jobs into process local buffered queue
+		controller is only aware of the job type / callback logic (partition) it is serving and thus pulls only a limited set of queue
+		controller serves jobs from process local queue as a response to next_work rpcs
+	2. each worker will have multiple executor process with multi threads, each thread will get next work and execute
+		while True:
+			w = get_next_work()
+			execute(w)
+	3. when executor start processing the job, it sends job staus call to heartbeat controller. status "processing"
+		1. executor will keep sending heartbeat while processing the job
+		2. when finished, it will send job status to heartbeat controller and it will update status in db. status "success/fatal failure"
+
+6. scheduler update "euqueued", heartbeat controller update "claimed / processing / retriable failure / success / fatal failure"
+
+status transfer
+new -> enqueued -> claimed -> processing -> (retriable failure) -> success / fatal failure
+
+each status will have a timeout and if that happen will re-enqueue the job
+enqueued: when controller goes down after pull job from queue and before job is claimed
+claimed: when controller goes down after claim a job
+processing: when executor goes down
+
+for we reach to each status we'll update next_triggered_time to current timestamp + status_timeout time 
+enqueued : 			scheduler set next triggered time to (enqueued_time + enqueued_timeout)
+claimed :   		heartbeat controller set next triggered time to (claimed_time + claimed_timeout)
+processing : 	    hc set next triggered time to ()
+retriable failure : hc set 
+success / failure : hc set
+
+what if heartbeat controller failed ?
+we can use same structure for scheduler have a master monitor all worker and have a hot standby master
+
+DB model:
+schedule table
+user_id  |  job id 	|  next trigger time  |  status  |  enqueued_time  |  enqueued_timeout  |  other status and their timeout  |  interval (for recursive job)  |  priority (optional prioritizer can compute that)
+
+"next_trigger_time" will have a index
+
+if job execution history is needed we can have a cron job that scan the schedule table and put rows with status = "completed / fatal failure" into history table
+
+
+no concurrent job execution
+Concurrent task execution is avoided through a combination of two methods in ATF. 
+First, tasks are explicitly claimed through an exclusive task state (Claimed) before starting execution. Once the task execution is complete, the task status is updated to one of Success, FatalFailure or RetriableFailure. 
+A task can be claimed only if its existing task state is Enqueued (retried tasks go to the Enqueued state as well once they are re-pushed onto SQS).
+
+However, there might be situations where once a long running task starts execution, its heartbeats might fail repeatedly yet the task execution continues. 
+ATF would retry this task by polling it from the store consumer because the heartbeat timeouts would’ve expired. This task can then be claimed by another worker and lead to concurrent execution. 
+To avoid this situation, there is a termination logic in the Executor processes whereby an Executor process terminates itself as soon as three consecutive heartbeat calls fail. 
+Each heartbeat timeout is large enough to eclipse three consecutive heartbeat failures. This ensures that the Store Consumer cannot pull such tasks 
+before the termination logic ends them—the second method that helps achieve this guarantee.
+
+
+
+Isolation
+Isolation of lambdas is achieved through dedicated worker clusters, dedicated queues, and dedicated per-lambda scheduling quotas. 
+In addition, isolation across different priorities within the same lambda is likewise achieved through dedicated queues and scheduling bandwidth.
+
+
+extended function:
+dead letter queue: for job that has over certain times retry we can put it into dead letter queue for investigation
+
+
+
+
+
+
+
+
+
+
+
 
 https://towardsdatascience.com/ace-the-system-design-interview-job-scheduling-system-b25693817950
+
+Requirements
+Create/delete a new job with its schedule
+Query all jobs owned by the user
+Query the status of a job (running, failed, finished, etc)
+Query the execution history of a job
+Retry support for failed tasks
+On-time execution (when a job is scheduled to run at 1 PM, it should be triggered around 1 PM)
 
 Read Operations
 	Given a user ID, retrieve all jobs that belong to it (by client)
@@ -15,7 +131,7 @@ Write Operations
 
 
 Schema
-job table
+job table (job metadata)
 partition key 	sort key
 user id 		job id 		retry times 	created 			interval
 2940			fgn23901 	3 				1/1/2019 13:33:21 	5hr
@@ -137,7 +253,7 @@ Health Checker
 
 
 
-
+https://dropbox.tech/infrastructure/asynchronous-task-scheduling-at-dropbox
 
 
 

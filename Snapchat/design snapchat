@@ -1,0 +1,9 @@
+Design a snapchat like application.
+
+can send text and image
+can have more than one recipient
+remove message when all the receiver has seen the message from the server side.
+What does the system look like?
+
+Q: How do we make sure we do not lose any message?
+Q: How exactly do we keep track of the total number of messages delivered and which service keeps track of the total delivered message count?

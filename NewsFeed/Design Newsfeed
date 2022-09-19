@@ -156,7 +156,8 @@ fanout services
 it will be appended to the news feed table as shown in Figure 11-6. The memory consumption can become very large if we store the entire user and post objects in the cache. Thus, only IDs are stored
 
 Newsfeed retrieval deep dive
-1. A user sends a request to retrieve her news feed. The request looks like this: /v1/me/feed 2. The load balancer redistributes requests to web servers.
+1. A user sends a request to retrieve her news feed. The request looks like this: /v1/me/feed 
+2. The load balancer redistributes requests to web servers.
 3. Web servers call the news feed service to fetch news feeds.
 4. News feed service gets a list post IDs from the news feed cache.
 5. A user’s news feed is more than just a list of feed IDs. It contains username, profile picture, post content, post image, etc. Thus, the news feed service fetches the complete user and post objects from caches 

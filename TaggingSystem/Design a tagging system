@@ -1,0 +1,371 @@
+Design a tagging system
+
+给数据库中的内容打标签
+实现以下几个功能
+1. add a tag/delete a tag/ update a tag
+2. search the contents with the tag
+3. get most popular tags
+
+As a user I can add, remove, and update tags on content
+As a user, I can click on a tag and see all content that has been associated with that tag
+As a user, I can see a dashboard of popular tags
+最后谈了谈scale，各种说大话consistent hashing和lambda architecture(俄罗斯小哥topK)之类的。
+
+第二场系统设计 是关于设计一个tagging system。具体来讲就是为所有产品由user添加tag，几个 function：1. 能添加，更新和删除tag， 2. user能filter tag 来查找产品。 主要考察api 和 database的设计。
+就重点问了api 和database design （包括选什么database， 怎么储存，优缺点等）
+
+Design a Tag system which should integrate with other Atlassian products
+Example - You added a tag to Jira, same tag should be available to be added to conflence page. When searching through tags, all pages (jira/confluence) should show up in result for that corresponding tag.
+
+You will be asked to design a system which can tag different atlassian products. Let's say, you create a jira ticket and want to tag it with some name, also you want to tag a post on confluence. Basically a shared service for tagging
+
+What all APIs you will expose?
+Database design
+SQL vs No SQL
+How will you scale the database?
+What is distributed cache?
+What is a replica, sharding, and paging?
+
+
+
+
+APIs:
+1. create new tag
+POST /api/v1/tags
+{
+	"tag_id": , 
+	"name": , 
+    ...
+	"products": []
+}
+POST /tags/_doc
+{
+	"name": "Coffee Maker",
+	...
+    "products": [],
+}
+
+2. create new product
+similar
+
+3. update / delete tag
+POST
+DELETE /api/v1/tags/{id}
+
+4. update / delete product
+similar
+
+5. add tag to product
+https://stackoverflow.com/questions/14822383/rest-api-adding-tags-to-an-entity
+https://softwareengineering.stackexchange.com/questions/232130/what-is-the-best-pattern-for-adding-an-existing-item-to-a-collection-in-rest-api
+https://stackoverflow.com/questions/2001773/understanding-rest-verbs-error-codes-and-authentication?_gl=1*ii4ekr*_ga*MTgxMjE2MzU3OS4xNjYyMDAzNDY5*_ga_S812YQPLT2*MTY2MzQ3Mjg5MC4xLjEuMTY2MzQ3MzA1MS4wLjAuMA..
+POST /api/v1/product/29292/tags
+{
+	"tags": ["tag A"]
+}
+
+6. delete tag from product
+DELETE /api/v1/product/29292/tags
+{
+	"tags": ["tag A"]
+}
+
+7. get top k
+GET /api/v1/top/{k}
+
+
+
+
+
+DB
+# 1
+denormalize tags into product table and use elasticsearch (good for large scale)
+probably better to store tag id and product id in products [] and tags [] since tag name and product name could be changed
+we can put id - name mapping in a rdbms or redis
+
+tags index
+{
+    "tag_id"
+    "name"
+    "products": [name1, name2 ...] or [id1, id2 ...] 	// keyword type, exact match, no analyzed
+}
+
+products index
+{
+    "product_id"
+    "name"
+    "tags": [name1, name2 ...] or [id1, id2 ... ]
+}
+
+-- create a new tag
+POST /tags/_doc
+{
+    "name": "Coffee Maker",
+    ...
+    "products": []
+}
+
+-- update a tag
+POST /tags/_update/100
+{
+    "doc": {
+        "name": "tag1"
+    }
+}
+
+-- get list of products for a tag
+GET /tags/_search
+{
+  "query": {
+  	"term": {
+  		"name": ""
+  	}
+  }
+}
+we get list of products from query res. 
+
+same for get list of tags for a product
+
+
+-- add tags to a product
+add element to array in es if not exist
+https://stackoverflow.com/questions/31142729/append-to-a-elasticsearch-field-list-array-if-its-not-an-existing-element
+https://stackoverflow.com/questions/43636935/how-to-add-new-element-to-the-existing-array-field-in-elasticsearch
+painless api
+https://www.elastic.co/guide/en/elasticsearch/painless/6.3/painless-api-reference.html#painless-api-reference-List
+
+POST /products/_update_by_query
+{
+    "query": {
+        "match": {
+            "_id": "3"
+        }
+    },
+    "script" : " if(! ctx._source.tags.contains(name)){ ctx._source.tags += name }",
+     "params" : {
+         "name" : "c"
+     }
+}
+
+-- remove tags from a product
+https://stackoverflow.com/questions/49384199/remove-elements-objects-from-array-in-elasticsearch-followed-by-matching-query
+POST products/_update_by_query
+{
+    "query": {
+        ...  // use regular ES query to remove only in relevant documents
+    },
+    "script": {
+        "source": """
+            for (int i=ctx._source.tag_list.length-1; i>=0; i--) {
+                if (ctx._source.tag_list[i] == params.tag) {
+                    ctx._source.tag_list.remove(i);
+                }
+            }
+        """,
+        "params": {
+            "tag": "green"
+        }
+    }
+}
+
+
+-- get size of tags of a product
+https://stackoverflow.com/questions/35644126/elasticsearch-get-for-a-substring-in-the-value-of-a-document-field/35645363
+https://stackoverflow.com/questions/53113822/find-length-size-of-the-array-type-field-in-each-doc/53113928#53113928
+GET
+{
+    "query" : {
+        "match_all": {}
+    },
+    "script_fields" : {
+        "size" : {
+            "script" : {
+                // "inline": "doc.field.value.substring(0, length)"
+                "_source": "ctx._source.tags.size()"
+            }
+        }
+    }
+}
+
+
+
+考虑tag标签会变动，mysql存储ID和名字，es存储ID不存储名字
+标签通过数组方式存储ES中，标签存储ID，不存储名字，因为名字会变化，并且使用keyword 类型或integer类型，不分词处理，保证过滤的性能。
+In Elasticsearch, there is no dedicated array data type. Any field can contain zero or more values by default, however, all values in the array must be of the same data type
+
+PUT /member_index
+{
+    "settings": {
+        "index": {
+            "refresh_interval": "1s",
+            "number_of_shards": "3",
+            "number_of_replicas": "1"
+        }
+    },
+    "mappings": {
+        "doc": {
+            "_all": {
+                "enabled": false
+            },
+            "properties": {
+                "member_id": {
+                    "type": "integer"
+                },
+                "member_type": {
+                    "type": "integer"
+                },
+                "tag_ids": {
+                    "type": "keyword"
+                },
+                "user_id": {
+                    "type": "integer"
+                },
+                "first_pay_time": {
+                    "format": "date_optional_time||epoch_millis",
+                    "type": "date"
+                },
+                "seller_id": {
+                    "type": "integer"
+                }
+            }
+        }
+    }
+}
+
+标签的基本查询
+GET /cc_seller_member/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "term": {
+            "tag_ids": {
+              "value": "135"
+            }
+          }
+        },
+        {
+          "term": {
+            "seller_id": {
+              "value": "50000024"
+            }
+          }
+        },{
+          "term": {
+            "member_type": {
+              "value": "2"
+            }
+          }
+        },{
+          "range": {
+            "first_pay_time": {
+              "gte": 1586609695000,
+              "lte": 1586609695000
+            }
+          }
+        }
+      
+      ]
+    }
+  }
+}
+
+每个标签下面的总人数多少？can be used to get top k most popular tags
+通过ES terms aggregation 聚合查询
+GET /member_index/_search
+{
+    "query": {
+        "bool": {
+            "must": [
+                {
+                    "terms": {
+                        "tags": [
+                            "21",
+                            "4"
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+}
+
+https://blog.csdn.net/weixin_38087443/article/details/108071729
+
+{ 
+  stringContent: "Some string content",
+  tags: ["important", "revisit", "elasticsearch"]
+}
+you will be able to search on this using tags. Elasticsearch will map each element of array with the document.
+When it comes to updating, please note Elasticsearch is NRT(Near realtime). You can update the document, and elasticsearch will subsequently update the document and reindex the document (Not the entire index).
+https://stackoverflow.com/questions/34741799/storing-tags-into-elasticsearch
+
+
+https://www.freesion.com/article/4070148535/
+https://blog.csdn.net/qq_21383435/article/details/118251928?spm=1001.2101.3001.6661.1&utm_medium=distribute.pc_relevant_t0.none-task-blog-2%7Edefault%7ECTRLIST%7EPayColumn-1-118251928-blog-108071729.topnsimilarv1&depth_1-utm_source=distribute.pc_relevant_t0.none-task-blog-2%7Edefault%7ECTRLIST%7EPayColumn-1-118251928-blog-108071729.topnsimilarv1&utm_relevant_index=1
+https://elasticsearch.cn/question/5630
+https://www.baeldung.com/elasticsearch-tagging
+
+
+
+
+
+# 2
+solution 1:
+relational db schema
+http://howto.philippkeller.com/2005/04/24/Tags-Database-schemas/
+http://howto.philippkeller.com/2005/06/19/Tagsystems-performance-tests/
+
+product  		tagmap 				tag
+product_id 		id  				tag_id
+name  			product_id 			name
+	 			tag_id
+
+INTERSECION Query for bookmark+webservice+semweb
+SELECT p.*
+FROM tagmap pt, product p, tag t
+WHERE pt.tag_id = t.tag_id
+AND (t.name IN ('bookmark', 'webservice', 'semweb'))
+AND p.id = pt.product_id
+GROUP BY p.id
+HAVING COUNT( p.id )=3
+
+UNION Query for bookmark|webservice|semweb
+SELECT p.*
+FROM tagmap pt, product p, tag t
+WHERE pt.tag_id = t.tag_id
+AND (t.name IN ('bookmark', 'webservice', 'semweb'))
+AND p.product_id = pt.product_id
+GROUP BY p.product_id
+
+MINUS Query for bookmark+webservice-semweb, that is: bookmark AND webservice AND NOT semweb.
+SELECT p.*
+FROM product p, tagmap pt, tag t
+WHERE p.product_id = pt.product_id
+AND pt.tag_id = t.tag_id 
+AND (t.name IN ('Programming', 'Algorithms'))
+AND p.product_id NOT IN (SELECT p.product_id FROM product b, tagmap pt, tag t WHERE p.product_id = pt.product_id AND pt.tag_id = t.tag_id AND t.name = 'Python')
+GROUP BY p.product_id
+HAVING COUNT( p.product_id ) =2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
