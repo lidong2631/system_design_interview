@@ -1,4 +1,10 @@
+Exotel talk
 https://www.youtube.com/watch?v=UEJ6xq4frEw
+
+options explored
+1. influxDB
+2. Elasticsearch
+3. Prometheus
 
 rsyslogd
 Default system logging / shipper service for most of linux favors
@@ -7,3 +13,14 @@ open-source software utility used on UNIX and Unix-like computer systems for for
 telegraf
 an open source plugin-driven server agent for collecting and reporting metrics
 
+
+
+
+
+push vs pull
+
+
+data store
+influx db
+prometheus
+facebook's in memory time series db - gorilla (check the paper)

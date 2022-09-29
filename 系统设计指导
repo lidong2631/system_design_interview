@@ -1,0 +1,116 @@
+https://www.1point3acres.com/bbs/thread-559285-1-1.html
+
+你为什么要写这个？
+从论坛受益(💰)匪浅，聊以此作为回馈。
+
+你有什么资格写这个？
+我没资格。我是个菜🐔。但是我闲啊
+
+系统设计面试考什么？
+考你如何做tradeoff，考你对一项技术的了解，考你分析问题的能力，等等
+
+怎么才算答的好？
+最理想的状况就是：题目给出来，你就知道这个系统大概的结构会是怎么样的，所有的考点在哪里。
+
+怎么做到立刻知道大概的结构
+你得看过这些结构并且知道它所有的tradeoff，知道它用到的所有技术等等，现场凭借经验想是只有大牛才能做的活。我等憨憨还是老实学习现有的系统把。
+
+怎么知道考点在哪里？
+想想如果你是面试官你会问什么？在看其他人设计的结构的时候带着问题去看带着问题去看带着问题去看，设想哪里你可以提出什么样的问题，这样慢慢你就会有体会了。
+举个例子，系统设计要用到message queue，大半会提到kafka。这个时候你得知道面试官会问kafka什么？他八成会问用kafka有什么问题。有啥问题？kafka只保证at least one time delivery。你最好给每个message加sequence number来防止duplictes
+（是的我知道kafka后来promise了exact one time delivery的feature。不过没人用）
+
+类似这样，你得在面试官问出来之前就知道问题是啥。这是可以做到的。只要你总是带着问题去看。
+
+看什么？educative上的那个么？
+那个只是入门，它是个好课但是不能应付所有的面试。原因：
+1. 它最大的问题就是它是作者的一家之言。作者所描述的系统很多其实并不是真实的在生产环境下的系统的样子
+2. 看完了你还是不知道会被问到什么问题
+3. 很多考点作者没有展开，比如考的最多的tinyurl，作者并没有提到cache部分的设计的考虑。在生产环境中如何refresh cache？如何invalidate一个cache中的url？用memcache还是redis？作者并没有说但是真的会有人考（我就被考到了）
+
+所以它不值得看么？
+不，它很值得看，目前来看它是最好的入门教材。建议看五遍，建议把每个不懂的词都google出来完全完全看懂。比如常常常常考到的bloomfilter，发现很多新手没看这个之前也许你还没见过这个词。请google出它的pro/con和怎么用什么时候用等等。以此类推。
+
+你说看这个不够，那看什么？
+1. 看Design Data Intensive Application这本书。请买这本书。有空就看。请一定把第二部分全部看完。有精力请看第三部分。第二部分请看3遍。第二部分能够解答40～50%你遇到的跟data有关的设计
+
+2. 最重要的而且并没有多少人提到的，请看各个大公司的engineer blog。非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要非常非常非常重要
+啥？blog有啥好看的？
+1. blog提到的系统就是现在在生产环境的系统
+2. blog会提到各种tradeoff以及做这种设计的原因
+3. 好的blog会给出各种详细的细节，甚至源代码（当然你不需要阅读源码这么深入）
+4. blog提到的系统很容易拿来举一反三
+
+以下内容需要积分高于 20 您已经可以浏览
+举例： https://eng.uber.com/cherami/
+请仔细阅读这一篇文章。如果读懂了并且在读的过程中不停的问自己考点，那么这一篇文章可以解决不下10个不同的system design问题：如何设计一个job queue？如何保证job一定执行？deadleatter咋设计（uber blog里还有单独一篇讲这个）如何设计一个分布式爬虫？等等等等
+哪里有好的blog？
+
+uber，airbnb的我看的很多。我时间少。你可以把大公司的都看了。
+
+我才深入看了10来篇高质量的就觉得融会贯通了。
+
+有one more thing么？
+有的。多看看经典的presentation presentation presentation。请去youtube搜，
+例如： 🔗www.youtube.com
+例如： 🔗www.youtube.com （*****）
+btw那些教你做system design的youtube视频（好多是印度人的）我全都看了。质量很一般很一般很一般阿西吧浪费我时间。有时间可以选着看看把。性价比低，不能帮你过serious的面试（比如FLAG家的system design）
+举个反面栗子：🔗www.youtube.com  这么长的一个视频，讲的就是一坨shit还是错的。。。真的浪费人生
+
+去infoq看。举个（最好的）栗子：
+https://www.infoq.com/presentations/pinterest/
+这一篇文章可以终结你对sharding问题的困惑。只靠shard用mysql也可以撑起billion级别的访问量的。
+
+我还很喜欢这篇： https://www.infoq.com/presentations/Twitter-Timeline-Scalability/
+
+按照这个套路走我真的能过所有的system design面试么？
+真的能。
+
+大概要多久能像你这么屌？（笑
+两个月就够了。0基础入门的话。
+
+你还能更屌一点么？
+能啊，请看论文。dynamo的论文，big table的论文，cassandra的论文，google doc系统的论文等等，很多
+
+jiuzhang的课有用么？
+出于好奇我看了。比educative作用小。它教你的，不足以应付面试。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

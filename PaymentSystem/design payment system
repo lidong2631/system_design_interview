@@ -1,0 +1,101 @@
+MoneyCon 2019 uber
+https://www.youtube.com/watch?v=5TD8m7w1xE0
+
+what happens if inbound msg is unable to be consumed ?
+ 																-> retry / dl queue
+what happends if midway through processing failure occurs ?
+
+
+
+what happens if a bug is introduced which produces invalid results ?
+
+
+
+
+
+
+
+
+
+
+
+			(create msg, generate checkout_id)
+client 		-> 		order creator 		-> 		kafka 		->  		payment service 	<-		retry queue
+	|																	/ 				\ 			|
+	|										db		<-			msg handler 	->		error handler 		-> 		dlq 
+	\/				(which db ? rdbms should be fine 				|
+					we can also store double entry ledger)		(split each order,
+client may													store it in db,
+query url													call psp,
+for result													upon webhook callback req
+or															write result to db)
+receive 															/\
+																	|
+notify																\/
+																	psp
+															(process and call webhook callback uri)
+
+
+
+
+api
+see pic
+
+
+
+db model
+see pic
+
+
+
+workflow
+payment execution status: NOT_STARTED / PROCESSING / SUCCESS / FAILED
+1. initial status is "NOT_STARTED"
+2. "PROCESSING" when payment service is handling (retry is also "PROCESSING")
+3. then it will become either "SUCCESS" OR "FAILED"
+4. then it will update ledger table
+5. when all payment orders under same checkout_id are done set "IS_PAYMENT_DONE" to True
+6. a scheduled job monitor status of in flight payment orders regularly
+
+
+exactly once delivery = at least once + at most once 	-> 	avoid double charge
+at least once is achieved by retry queue
+at most once is achieved by idempotent key (uuid, payment_order_id / check_out_id, in e-commerce website, the idempotency key is the id od the shopping cart right before checkout)
+	to perform an idempotent payment request, an idempotency key is added to the HTTP header: <idempotency-key: key_value>
+	if multiple concurrent request are detected with same idempotency key, only one is processed and others receive 429 Too Many Requests status code
+	To support idempotency, we can use database's unique key constraint
+
+
+
+consistency
+if data is replicated, replication lag can cause inconsistent data btw primary db and replicas. we can:
+	Ensure all replicas are always in sync. use consensus algorithms such as Paxos and Raft, or use consensus-based distributed databases such as YogabyteDb or CockroachDB
+
+
+
+reconcilation between our payment app and psp
+ledger (good to have)
+every night psp send a settlement file to us. it contains balance of the bank account, together with all transactions that took place on this bank account during the day. 
+reconcilation parses the settlement file and compares the details with the ledger
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

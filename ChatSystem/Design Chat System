@@ -22,9 +22,11 @@ Save a message between user A and user B
 Save a new message by user A in group G
 Add/delete user A to/from group G
 
+
+
 DB
 database is used primarily as a key-value store. No complex relational ops such as join are needed. must be horizontally scalable and tuned for writes.
-
+cassandra or redis should do it
 
 schema
 see images
@@ -58,6 +60,7 @@ if we mutate one, the other should be modified to maintain consistency, which re
 user profile table
 user id  |  password  |  status  | profile pic url
 partition key
+
 
 
 api design
@@ -99,27 +102,46 @@ presence detection
 
 
 
-questions might be asked
-The first issue is how web socket servers communicate with each other (step 5 in figure 6). How websocket send message to each other ?
-we can use sync http cal. 
-issues:
-1. No message order 	(rely on local sequence)
-	private chat
-	常见优化方案，在A往B发出的消息中，加上发送方A本地的一个绝对时序（比如本机时间戳），来表示接收方B的展现时序。
-	那么当接收方B收到消息后，即使极端情况下消息可能存在乱序到达，但因为这个乱序的时间差对于普通用户来说体感是很短的，在UI展现层按照消息中自带的绝对时序排个序后再显示，用户其实是没有太多感知的。
-	group chat
-	在service连接池层面做细小的改造，保证一个群的消息落在同一个service上，这个service就可以用本地seq来序列化同一个群的所有消息，保证所有群友看到消息的时序是相同的。
-	https://segmentfault.com/a/1190000037720265
-2. send each message in separate call is expensive (implement buffering algorithm on WebSocket servers send accumulated messages, say, ~50 MS with randomized offsets (preventing everyone from sending messages at the same time)
+presence service
+client sends a heartbeat event to the server every 5 seconds. After sending 3 heartbeat events, the client is disconnected and does not reconnect within x = 30 seconds (
+This number is arbitrarily chosen to demonstrate the logic). The online status is changed to offline.
+Online status fanout for smaller group ppl
+bigger group can use poll or fetch online status only when a user enters a group or manually refreshes the friend list
 
-Handling Group Chat (1. enforce limit for group say max 500 ppl only send msg to online user.)
+
+
+
+questions might be asked
+1. The first issue is how web socket servers communicate with each other (step 5 in figure 6). How websocket send message to each other ?
+	we can use sync http cal. 
+	issues:
+	1. No message order 	(rely on local sequence)
+		private chat
+		常见优化方案，在A往B发出的消息中，加上发送方A本地的一个绝对时序（比如本机时间戳），来表示接收方B的展现时序。
+		那么当接收方B收到消息后，即使极端情况下消息可能存在乱序到达，但因为这个乱序的时间差对于普通用户来说体感是很短的，在UI展现层按照消息中自带的绝对时序排个序后再显示，用户其实是没有太多感知的。
+		group chat
+		在service连接池层面做细小的改造，保证一个群的消息落在同一个service上，这个service就可以用本地seq来序列化同一个群的所有消息，保证所有群友看到消息的时序是相同的。
+		https://segmentfault.com/a/1190000037720265
+	2. send each message in separate call is expensive (implement buffering algorithm on WebSocket servers send accumulated messages, say, ~50 MS with randomized offsets (preventing everyone from sending messages at the same time)
+
+2. Handling Group Chat (1. enforce limit for group say max 500 ppl only send msg to online user.)
 write amplication vs read amplication
 For smaller groups or inactive groups, it is okay to do pushing since write amplification won’t stress out the servers. For very active and large groups, clients must query the HTTP server regularly for messages.
 
-batch writing
+3. batch writing
 When a message is received by a web socket server, it is persisted into the database. The simplest approach would be calling the database directly. With this implementation, the database is bombarded with ~100K RPS traffic
 use queues for batch insertion. When the queue service receives a write, the web socket server, in turn, acknowledges the client. At the other end of the queue, 
 a dedicated batch writer can group hundreds of messages into a single request
+
+4. clock synchronization in network
+use network time protocol NTP
+
+5. sync up message on different device
+Each device maintains a variable called cur_max_message_id, which keeps track of the latest message ID on the device. Messages that satisfy the following two conditions are considered as news messages:
+• The recipient ID is equal to the currently logged-in user ID.
+• Message ID in the key-value store is larger than cur_max_message_id .
+With distinct cur_max_message_id on each device, message synchronization is easy as each device can get new messages from the KV store.
+
 
 
 

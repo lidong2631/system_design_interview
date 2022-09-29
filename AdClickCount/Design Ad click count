@@ -1,3 +1,238 @@
 Design Ad click count
 
+Yelp case
 https://www.youtube.com/watch?v=hzxytnPcAUM
+
+requirement:
+  aggregate events over a day period
+  slice aggregates along defined dimensions
+  provide partial click counts as day progresses
+  make aggregates as accurate as possible
+
+an illustrative example
+  count ads click over a day period
+  provide click counts by ad campeign
+  provide partial click counts as day progresses
+
+day 		campaign id 		number of clicks 								day 		campaign id 		number of clicks
+4/17/2019   23265 				35 												4/17/2019 	23265 				42
+
+
+					app manage kafka offset commit
+kafka 		-> 			spark streaming (micro-batch) 		-> 		cassandra
+				no pipelining meaning you completely finish processing the current micro-batch before take next one
+				stage 1 will completely finish before jump to stage 2
+
+
+approach 1
+agg count every min and send to cassndra. cassandra will add that partial count into total count.
+issue: 
+Count is not idempotent
+Counter is good for approximate metrics (likes / follows)
+
+approach 2
+use cassandra for current count
+increment in spark and update cassandra
+
+failure modes
+stage 1: read from kafka and do count. if failed, spark have retry and it only read from streaming so it's fine
+stage 2: read from db for current count. safe
+stage 3: add current count with delta and write to db. if failed say some campaign get count updated while others not when it's retry we'll have extra click count for those campaign
+ 																 or spark app fails to commit the kafka offset same messges will be processed again
+
+exact once
+distinguish btw processed data / unprocessed data
+version is the cure !
+						\/
+5 		4 		3 		2 		1 		0
+id 5 	id 9 	id 9 	id 5 	id 5 	id 9 	
+clk 			clk 			clk 	clk
+partition 0 			
+				\/
+5 		4 		3 		2 		1 		0
+id 5 	id 9 	id 5 	id 5 	id 9 	id 9 	
+clk 			 		clk 	clk 	clk
+partition 1
+
+day 		ad id 		number of clicks 		version
+4/17/2019	5 			2 						P0: 2
+												P1: 3
+4/17/2019	9 			3 						P0: 0
+												P1: 1
+
+
+kafka 		-> 			spark streaming (micro batching)
+stage 1: read current count and version, send version to stage 2, current count to stage 3
+stage 2: read next micro batch msgs from kafka and get version from stage 1, remove processed records and calculate delta for time window and send delta to stage 3
+stage 3: read delta and current count from stage 1 and 2, add them together and update current count / version in cassandra (need to run in a distributed transaction), then commit offset in kafka
+
+
+
+
+
+
+api
+1. aggregate number of click of ad_id in the last M minutes
+req
+GET /v1/ads/{:ad_id}/aggregated_count
+{
+	from 	(start min)
+	to 		(end min)
+	filter 	(identifier for filtering)
+}
+
+res
+{
+	ad_id
+	count
+}
+
+2. top n most clicked ad_ids in last M minutes
+req
+GET /v1/ads/popular_ads
+{
+	count
+	from 	(start min)
+	to 		(end min)
+	filter 	(identifier for filtering)	
+}
+
+res
+{
+	ad_ids
+}
+
+
+
+data model
+raw data
+[AdClickEvent] ad001, 2021-01-01 00:00:01, user 1, 201.1.1.21, USA
+ad_id 	click_timestamp 	user_id 		ip 		country
+ad001 	2021-01-01 00:00:01 user1 			 		usa
+
+aggregated data
+ad_id 	click_minute 		count
+ad001 	202101010000 		5
+
+ad_id 	click_minute 		filter_id 		count
+ad001 	202101010000 		0012 			5
+
+filter_id 		region 		ip 		user_id
+0012 			us 			
+
+
+
+choose right database
+Cassandra / InfluxDB
+
+
+
+high level design
+
+										(mapreduce)		(ad count / top n most clicked)
+Log Watcher 	-> 		mq 		-> 		agg service 			-> 								mq
+						|																		|
+						\/																		\/
+					db writer																db writer
+						|																		|
+						\/																		\/
+					raw data db 															agg db
+Data recalculation
+if we discover a major bug in agg service, we need to recalculate agg data from raw data
+1. recalculation service retrieves data from raw data storage
+2. retrieved data sent to dedicated agg service
+3. agg results sent to second mq
+
+
+
+Time
+event time vs processing time
+event time: accurate but depends on timestamp generated on client side
+processing time: more reliable but not accurate
+https://www.linkedin.com/pulse/understanding-window-trigger-watermark-streaming-pipeline-hora/?trk=read_related_article-card_title
+https://nightlies.apache.org/flink/flink-docs-master/docs/dev/datastream/event-time/generating_watermarks/
+https://www.databricks.com/blog/2017/05/08/event-time-aggregation-watermarking-apache-sparks-structured-streaming.html
+
+
+
+aggregation window
+tumbling window for ad click events every minute
+sliding window for top N clicked ads for last m minutes
+
+
+
+delivery guarantee (important !!!)
+exact once
+data deduplication
+if an agg service node goes down in the middle of aggregation and the upstream service has not received an ack. same events might be sent and aggregated again
+see pic
+
+
+
+scale system
+mq
+1. use ad_id as hashing key
+2. pre-allocate enough partitions in advance
+3. topic sharding. topic_europe, topic_asia or topic_web_ads, topic_mobile_ads
+
+agg service
+deploy on resource providers like YARN ~ multi-processing
+
+cassandra
+
+
+
+hotspot issue
+global-local aggregation / split distinct agg
+
+
+fault tolerance
+snapshot and kafka replay (record offset)
+
+
+reconcilation
+sort the ad click events by event time in every partition at the end of the day using a batch job and reconciling with real-time agg result
+
+
+
+alternative design
+specialized software used in big data pipeline
+store ad click data in hive with elasticsearch layer built for faster queries. agg is done in olap db such as clickhouse or druid
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
