@@ -80,6 +80,9 @@ reconcilation parses the settlement file and compares the details with the ledge
 
 
 
+how to store credit card info ? (system needs to be PCI compliants)
+encrypts it as soon as possible and store in a limit access directory
+https://www.pcidssguide.com/how-to-store-credit-card-information/
 
 
 

@@ -1,5 +1,7 @@
 Design job scheduler (airflow)
 
+https://dropbox.tech/infrastructure/asynchronous-task-scheduling-at-dropbox
+
 question to ask ?
 1. support recursive job ? which type ? (interval or hard-coded for a specific time)
 2. do we need to reserve execution history
@@ -12,17 +14,30 @@ assumption:
 
 API
 submit_job(user_id, schedule, code_location)
+POST /api/v1/job
+{
+	'user_id':
+	'schedule':
+	'recursive':
+	'interval':
+}
+
 retrieve_all_jobs(user_id)
+GET /api/v1/user/{user_id}/jobs
+
 delete_job(user_id, job_id)
+DELETE /api/v1/user/{user_id}/job/{job_id}
+
 get_exec_history(job_id)
+GET /api/v1/job/{job_id}/history
 
 
-flow:
+--- flow:
 1. client send req to schedule a job
 
 2. DB stores job in "job schedule" table. status "new"
 
-3. scheduler polls jobs on a config interval and push to queue. status "enqueued". 
+3. scheduler (store consumer) polls jobs on a config interval and push to queue. status "enqueued". 
 	select job_id from schedule where next_trigger_time <= time.now() order by next_trigger_time 
 	every 2s.
 	(master workers: master polls and distribute work among workers. worker push jobs into queue and send heartbeat to master. there is a standby master in case of current master is down)
@@ -49,7 +64,7 @@ flow:
 
 6. scheduler update "euqueued", heartbeat controller update "claimed / processing / retriable failure / success / fatal failure"
 
-status transfer
+--- status transfer
 new -> enqueued -> claimed -> processing -> (retriable failure) -> success / fatal failure
 
 each status will have a timeout and if that happen will re-enqueue the job
@@ -57,26 +72,28 @@ enqueued: when controller goes down after pull job from queue and before job is 
 claimed: when controller goes down after claim a job
 processing: when executor goes down
 
-for we reach to each status we'll update next_triggered_time to current timestamp + status_timeout time 
+for each status we'll update next_triggered_time to current timestamp + status_timeout time 
 enqueued : 			scheduler set next triggered time to (enqueued_time + enqueued_timeout)
 claimed :   		heartbeat controller set next triggered time to (claimed_time + claimed_timeout)
-processing : 	    hc set next triggered time to ()
-retriable failure : hc set 
-success / failure : hc set
+processing : 	    hc set next triggered time to (processing_time + processing_timeout)
+retriable failure : hc set next triggered time to (retry_time + retry_timeout)
+success / failure : N/A
 
 what if heartbeat controller failed ?
 we can use same structure for scheduler have a master monitor all worker and have a hot standby master
 
-DB model:
+
+--- DB model:
 schedule table
 user_id  |  job id 	|  next trigger time  |  status  |  enqueued_time  |  enqueued_timeout  |  other status and their timeout  |  interval (for recursive job)  |  priority (optional prioritizer can compute that)
 
 "next_trigger_time" will have a index
 
-if job execution history is needed we can have a cron job that scan the schedule table and put rows with status = "completed / fatal failure" into history table
+**if job execution history is needed we can have a cron job that scan the schedule table and put rows with status = "completed / fatal failure" into history table
 
 
-no concurrent job execution
+
+--- no concurrent job execution
 Concurrent task execution is avoided through a combination of two methods in ATF. 
 First, tasks are explicitly claimed through an exclusive task state (Claimed) before starting execution. Once the task execution is complete, the task status is updated to one of Success, FatalFailure or RetriableFailure. 
 A task can be claimed only if its existing task state is Enqueued (retried tasks go to the Enqueued state as well once they are re-pushed onto SQS).
@@ -89,12 +106,12 @@ before the termination logic ends them—the second method that helps achieve th
 
 
 
-Isolation
+--- Isolation
 Isolation of lambdas is achieved through dedicated worker clusters, dedicated queues, and dedicated per-lambda scheduling quotas. 
 In addition, isolation across different priorities within the same lambda is likewise achieved through dedicated queues and scheduling bandwidth.
 
 
-extended function:
+--- extended function:
 dead letter queue: for job that has over certain times retry we can put it into dead letter queue for investigation
 
 
@@ -249,11 +266,6 @@ Health Checker
 
 
 
-
-
-
-
-https://dropbox.tech/infrastructure/asynchronous-task-scheduling-at-dropbox
 
 
 
