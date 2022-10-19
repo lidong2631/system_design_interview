@@ -1,5 +1,19 @@
 Design notification system
 
+
+general architecture																			(optional or put failed msg to failed queue and let subscriber decides)
+											 ------------------------------------------			retry service (put failed notification msg back to queue)
+											|															/\
+											\/															|				task executor may delegate other microservices to send http endpoint / APN / FCM / SMS / EMAIL
+message  	-> 		fronend 	-> 		queue(kafka) 	-> 		sender / notifier 	(retriever + user settings client + task creator + task executor)	-> (queue)->	services for http / APN / FCM / SMS / EMAIL 	->  subscriber
+ 			(ratelimiter/ssl decrypt...)							| 			pool of threads						pool of threads
+ 																	| 				(each task is to send notification to a single user. retry)
+ 																	\/
+ 															 user settings cache
+ 															 		|
+ 															 		\/
+ 															 user settings db (topics / subscriber to topic)
+ 															 -- for a particular message (apple stock rises 5% in past 5 mins) find who subscribe to this topic and need to be notified
 high level design
 Different types of notifications
 
@@ -47,9 +61,76 @@ created_at 		timestamp
 
 
 
+Components
+1. Service 1 to N: They represent different services that send notifications via APIs provided by notification servers.
+
+2.Notification servers: They provide the following functionalities:
+• Provide APIs for services to send notifications. Those APIs are only accessible internally
+or by verified clients to prevent spams.
+• Carry out basic validations to verify emails, phone numbers, etc.
+• Query the database or cache to fetch data needed to render a notification.
+• Put notification data to message queues for parallel processing.
+
+POST https://api.example.com/v/sms/send
+
+3. Cache: User info, device info, notification templates are cached. DB: It stores data about user, notification, settings, etc.
+
+4. Message queues: They remove dependencies between components. Message queues serve as buffers when high volumes of notifications are to be sent out. Each notification type is assigned with a distinct message queue so an outage in one third-party service will not affect other notification types.
+
+5. Workers: Workers are a list of servers that pull notification events from message queues and send them to the corresponding third-party services.
+
+6. Third-party services: Already explained in the initial design.
+7. iOS, Android, SMS, Email: Already explained in the initial design.
+
+
+workflow
+1. A service calls APIs provided by notification servers to send notifications.
+2. Notification servers fetch metadata such as user info, device token, and notification setting from the cache or database.
+3. A notification event is sent to the corresponding queue for processing. For instance, an iOS push notification event is sent to the iOS PN queue.
+4. Workers pull notification events from message queues. 5. Workers send notifications to third party services.
+6. Third-party services send notifications to user devices.
+
+
+
 deep dive
 
 Reliability
+How to prevent data loss ? retry
+
+Will recipients receive a notification exactly once ? no 
+To reduce the duplication occurrence, we introduce a dedupe mechanism and handle each failure case carefully. Here is a simple dedupe logic:
+When a notification event first arrives, we check if it is seen before by checking the event ID. If it is seen before, it is discarded. Otherwise, we will send out the notification.
+
+
+Additional components and considerations
+Notification template
+Notification setting
+Rate limiting
+Security in push notifications
+For iOS or Android apps, appKey and appSecret are used to secure push notification APIs [6]. Only authenticated or verified clients are allowed to send push notifications using our APIs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

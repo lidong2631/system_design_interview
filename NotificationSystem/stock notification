@@ -1,0 +1,44 @@
+https://tianpan.co/notes/162-designing-smart-notification-of-stock-price-changes
+
+
+
+Requirements 
+3 million users
+5000 stocks + 250 global stocks
+a user gets notified about the price change when
+subscribing the stock
+the stock has 5% or 10% changes
+since a) the last week or b) the last day
+extensibility. may support other kinds of notifications like breaking news, earnings call, etc.
+
+
+
+
+Price ticker
+	data fetching policies
+		option 1 preliminary: fetches data every 5 mins and flush into the time-series database in batches.
+		option 2 advanced: nowadays external systems usually push data directly so that we do not have to pull all the time.
+		~6000 points per request or per price change.
+	data retention of 1 week, because this is just the speeding layer of the lambda architecture.
+
+Price watcher
+	read the data ranging from last week or last 24 hours for each stock.
+	calculate if the fluctuation exceeds 5% or 10% in those two time spans. we get tuples like (stock, up 5%, 1 week).
+	corner case: should we normalize the price data? for example, some abnormal price like someone sold UBER mistakenly for $1 USD.
+	ratelimit (because 5% or 10% delta may occur many times within one day), and then emit an event PRICE_CHANGE(STOCK_CODE, timeSpan, percentage) to the notification queue.
+
+might need a notification type db and cache as well for Price watcher to read
+
+Periodical triggers are cron jobs, e.g. Airflow, Cadence.
+
+notification queue
+	may not necessarily be introduced in the first place when users and stocks are small.
+	may accept generic messaging event, like PRICE_CHANGE, EARNINGS_CALL, BREAKING_NEWS, etc.
+
+Notifier
+	subscribe the notification queue to get the event
+	and then fetch who to notify from the user settings service
+	finally based on user settings, send out messages through APNs, FCM or AWS SES.
+
+user settings db would have table partitioned by notification type so notifier can easily know who subscript for a particular notification
+each notification typ could be a topic and notifier will consume messages and send to all user subscribe the notification type

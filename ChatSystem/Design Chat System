@@ -1,6 +1,24 @@
 Design Chat System (slack, discord, whatsapp)
 
+InfoQ How Slack Works
+https://www.youtube.com/watch?v=WE9c9AZe-DY
+
+Scott shi
+https://www.youtube.com/watch?v=-UXWETzHG38
+
+IM消息ID技术专题(一)：微信的海量IM聊天消息序列号生成实践（算法原理篇)
+http://www.52im.net/thread-1998-1-1.html
+
+
+
 broadcast in group chat is similar to fanout in newsfeed (push vs pull)
+
+
+how to generate message id ? (need to be unique and monotonically increasing within one channel or private chat)
+融云消息id的设计 80bits total. 64bit : 时间戳 42bit | 自旋ID 12bit | 会话类型4bit | 会话ID高位6bit 16bit：会话ID低位
+https://blog.csdn.net/liaya1/article/details/126426629?spm=1001.2101.3001.6650.6&utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7EBlogCommendFromBaidu%7ERate-6-126426629-blog-108218729.pc_relevant_multi_platform_whitelistv4&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7EBlogCommendFromBaidu%7ERate-6-126426629-blog-108218729.pc_relevant_multi_platform_whitelistv4&utm_relevant_index=12
+
+
 
 from zixuan zhang
 https://towardsdatascience.com/ace-the-system-interview-design-a-chat-application-3f34fd5b85d0

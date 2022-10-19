@@ -81,6 +81,10 @@ success / failure : N/A
 
 what if heartbeat controller failed ?
 we can use same structure for scheduler have a master monitor all worker and have a hot standby master
+https://hadoop.apache.org/docs/r3.0.1/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithNFS.html
+fence method
+A fencing method is a method by which one node can forcibly prevent another node from making continued progress. This might be implemented by killing a process on the other node, 
+by denying the other node's access to shared storage, or by accessing a PDU to cut the other node's power.
 
 
 --- DB model:

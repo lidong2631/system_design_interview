@@ -3,6 +3,10 @@ Design Ad click count
 Yelp case
 https://www.youtube.com/watch?v=hzxytnPcAUM
 
+uber
+https://www.uber.com/blog/real-time-exactly-once-ad-event-processing/
+
+
 requirement:
   aggregate events over a day period
   slice aggregates along defined dimensions
@@ -54,11 +58,11 @@ id 5 	id 9 	id 5 	id 5 	id 9 	id 9
 clk 			 		clk 	clk 	clk
 partition 1
 
-day 		ad id 		number of clicks 		version
-4/17/2019	5 			2 						P0: 2
-												P1: 3
-4/17/2019	9 			3 						P0: 0
-												P1: 1
+day 				ad id 		number of clicks 		version
+4/17/2019		5 						2 							P0: 2
+																					P1: 3
+4/17/2019	9 							3 							P0: 0
+																					P1: 1
 
 
 kafka 		-> 			spark streaming (micro batching)
